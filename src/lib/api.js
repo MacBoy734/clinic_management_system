@@ -11,7 +11,7 @@ async function request(path, options = {}) {
   if (res.status === 401 && typeof window !== 'undefined') {
     useAuthStore.getState().logout()
     window.location.href = '/'
-    return
+    throw new Error('Session expired')
   }
 
   const data = await res.json().catch(() => null)
