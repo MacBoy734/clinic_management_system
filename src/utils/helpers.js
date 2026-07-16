@@ -50,13 +50,6 @@ export function timeAgo(dateStr) {
   return formatDate(dateStr)
 }
 
-// Calculate age from date of birth
-export function calcAge(dob) {
-  if (!dob) return null
-  const d = new Date(dob)
-  const diff = Date.now() - d.getTime()
-  return Math.floor(diff / (365.25 * 24 * 60 * 60 * 1000))
-}
 
 // Minutes since arrival (for queue wait times)
 export function waitMinutes(dateStr) {

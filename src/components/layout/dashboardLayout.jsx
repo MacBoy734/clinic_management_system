@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import Link from 'next/link'
 import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
@@ -23,8 +23,8 @@ const NAV_BY_ROLE = {
   doctor: [
     { href: '/doctor', label: 'Patient Queue', icon: 'list' },
     { href: '/doctor/consultation', label: 'Consultation Room', icon: 'stethoscope' },
-    { href: '/doctor/verification', label: 'Medication Verification', icon: 'checkCircle' },
     { href: '/doctor/patients', label: 'Patient Database', icon: 'users' },
+    { href: '/doctor/drugs', label: 'Drugs stock', icon: 'pillBottle' },
     { href: '/doctor/orders', label: 'Pharmacy Orders', icon: 'shoppingCart' },
     { href: '/doctor/notifications', label: 'Notifications', icon: 'bell' },
   ],
@@ -50,6 +50,7 @@ const NAV_BY_ROLE = {
     { href: '/admin/inventory', label: 'Inventory', icon: 'box' },
     { href: '/admin/finance', label: 'Finance', icon: 'box' },
     { href: '/admin/referrals', label: 'Referrals & Commission', icon: 'dollarSign' },
+    { href: '/admin/logs', label: 'Logs', icon: 'clipboard' },
     { href: '/admin/notifications', label: 'Notifications', icon: 'bell' },
     { href: '/admin/reports', label: 'Reports', icon: 'barChart' },
     { href: '/admin/settings', label: 'Settings', icon: 'settings' },
@@ -66,7 +67,7 @@ const ROLE_LABELS = {
 
 // Maps notification.type → display config for dot color + type label
 const NOTIF_TYPE_CONFIG = {
-  'patient:new': { dot: 'bg-blue-400', label: 'New patient' },
+  'visit:new': { dot: 'bg-blue-400', label: 'New patient' },
   'visit:forwarded': { dot: 'bg-indigo-400', label: 'Visit forwarded' },
   'visit:completed': { dot: 'bg-emerald-400', label: 'Visit completed' },
   'lab:results_ready': { dot: 'bg-purple-400', label: 'Lab ready' },
@@ -183,10 +184,15 @@ function NotificationDropdown({ page, setPage }) {
           return (
             <div
               key={n.id}
-              className="px-4 py-3 border-l-2 border-l-transparent hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors"
+              className={[
+                'px-4 py-3 border-l-2 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors',
+                n.is_read
+                  ? 'border-l-transparent opacity-60'
+                  : 'border-l-[#1a6cbf] dark:border-l-blue-500 bg-blue-50/30 dark:bg-blue-900/10',
+              ].join(' ')}
             >
               <div className="flex items-start gap-2.5">
-                <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${cfg.dot}`} />
+                <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${n.is_read ? 'bg-gray-300 dark:bg-gray-600' : cfg.dot}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2 mb-0.5">
                     <span className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-500">
@@ -278,6 +284,12 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
     staleTime: 20000,
   })
   const unreadCount = notifMeta?.unread_count ?? 0
+  const markAllReadMutation = useMutation({
+    mutationFn: () => api.patch('/api/notifications/read-all'),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['notifications', 'meta'] })
+    },
+  })
 
   // ── Auth guard ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -341,8 +353,8 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
     setProfileOpen(false)
     setNotifPage(1) // reset to page 1 each time dropdown opens
     if (opening) {
-      // Invalidate so the dropdown always shows fresh data when opened
-      qc.invalidateQueries({ queryKey: ['notifications'] })
+      qc.refetchQueries({ queryKey: ['notifications', 1] })
+        .finally(() => markAllReadMutation.mutate())
     }
   }
 

@@ -1,23 +1,27 @@
 'use client'
 
-// InventoryTab — Admin inventory management with 3 internal sub-tabs.
+// InventoryTab — Admin inventory management with 4 internal sub-tabs.
 // Sub-tab selection is component-local useState (no URL routing) since
 // the parent /admin/inventory page already owns the URL.
 //
-// Sub-tabs:
-//   Lab Stock         → GET /api/lab/stock { items }
-//                       PATCH /api/lab/stock { id, quantity }
-//   Drug Stock        → GET /api/pharmacy/drugs { items } (fallback: /api/pharmacy/stock)
-//                       PATCH /api/pharmacy/stock { id, quantity }
-//   Charge Templates  → GET /api/procedures { procedures, familyPlanningMethods }
-//                       POST /api/procedures
-//                       PATCH /api/procedures/:id { name?, price?, category?, is_active? }
-//                       DELETE /api/procedures/:id
+// All four sub-tabs are admin-authed (mounted under router.use(authorize('admin'))):
+//   Lab Stock         → GET/POST/PUT/DELETE /api/admin/lab-stock
+//                       PATCH /api/admin/lab-stock/:id/quantity { adjustment }
+//   Drug Stock        → GET/POST/PUT/DELETE /api/admin/drug-stock
+//                       PATCH /api/admin/drug-stock/:id/quantity { adjustment }
+//   Charge Templates  → GET/POST /api/admin/charge-templates
+//                       PATCH/DELETE /api/admin/charge-templates/:id
+//   Restock Verify    → GET /api/admin/restocks
+//                       PATCH /api/admin/restocks/:id/verify | /reject
+//
+// Fetch strategy: lazy per sub-tab. Only the mounted sub-tab's query fires.
+// Restock verification cross-invalidates lab + drug stock so approved stock
+// shows immediately if those tabs are revisited.
 
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import api  from '@/lib/api'
+import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, Icon,
@@ -36,6 +40,7 @@ const CATEGORY_BADGES = {
   consultation: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   procedure: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
   lab: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  medication: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   family_planning: 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400',
   antibiotic: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
   analgesic: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -46,12 +51,27 @@ const CATEGORY_BADGES = {
   vitamin: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   supplement: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   thyroid: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400',
+  general: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   hematology: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   chemistry: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
   urinalysis: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  microbiology: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400',
   supplies: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   other: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
 }
+
+// Free-text category option lists (no DB enum on stock categories)
+const DRUG_CATEGORIES = ['antibiotic', 'analgesic', 'antihypertensive', 'antidiabetic', 'antacid', 'antihistamine', 'supplement', 'family_planning', 'thyroid', 'general']
+const DRUG_FORMS = ['tablet', 'capsule', 'injection', 'syrup', 'cream', 'drops']
+const LAB_CATEGORIES = ['supplies', 'hematology', 'chemistry', 'urinalysis', 'microbiology']
+
+// ChargeCategory enum — must match schema exactly
+const TEMPLATE_CATEGORIES = [
+  { key: 'consultation', label: 'Consultation' },
+  { key: 'procedure', label: 'Procedure' },
+  { key: 'lab', label: 'Lab Test' },
+  { key: 'medication', label: 'Medication' },
+]
 
 function daysUntil(dateStr) {
   if (!dateStr) return null
@@ -234,35 +254,38 @@ function RowAction({ icon, label, onClick, color = 'gray', disabled }) {
   )
 }
 
+// Reusable category/form <option> renderers
+const optionsFrom = (arr) =>
+  arr.map((v) => <option key={v} value={v}>{cap(v)}</option>)
+
 // ─── Sub-tab 1: Lab Stock ────────────────────────────────────────
 function LabStockSubTab() {
   const queryClient = useQueryClient()
-  const user = useAuthStore((s) => s.user)
   const [restockItem, setRestockItem] = useState(null)
   const [editItem, setEditItem] = useState(null)
   const [showAddLab, setShowAddLab] = useState(false)
 
   const q = useQuery({
     queryKey: ['admin', 'lab-stock'],
-    queryFn: () => api.get('/api/lab/stock'),
+    queryFn: () => api.get('/api/admin/lab-stock'),
     staleTime: 30000,
   })
 
   const restockMut = useMutation({
-    mutationFn: ({ id, quantity }) => api.patch('/api/lab/stock', { id, quantity }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] })
-      queryClient.invalidateQueries({ queryKey: ['lab', 'stock'] })
-    },
+    // ADD via adjustment — NOT an absolute set
+    mutationFn: ({ id, quantity }) => api.patch(`/api/admin/lab-stock/${id}/quantity`, { adjustment: quantity }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] }),
   })
 
   const editMut = useMutation({
-    mutationFn: ({ id, name, reorder_level, expiry_date }) =>
-      api.patch(`/api/lab/stock`, { id, quantity: 0, name, reorder_level, expiry_date }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] })
-      queryClient.invalidateQueries({ queryKey: ['lab', 'stock'] })
-    },
+    // PUT preserves current_stock (endpoint only touches supplied metadata fields)
+    mutationFn: ({ id, ...body }) => api.put(`/api/admin/lab-stock/${id}`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] }),
+  })
+
+  const delMut = useMutation({
+    mutationFn: (id) => api.delete(`/api/admin/lab-stock/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] }),
   })
 
   if (q.isLoading) {
@@ -279,7 +302,8 @@ function LabStockSubTab() {
     return <ErrorState message={q.error?.message || 'Could not load lab stock'} onRetry={q.refetch} />
   }
 
-  const items = Array.isArray(q.data?.items) ? q.data.items : []
+  // Endpoint returns { stock }
+  const items = Array.isArray(q.data?.stock) ? q.data.stock : []
   const lowStock = items.filter((i) => (Number(i.current_stock) || 0) > 0 && (Number(i.current_stock) || 0) <= (Number(i.reorder_level) || 0))
   const outOfStock = items.filter((i) => (Number(i.current_stock) || 0) === 0)
   const expiringSoon = items.filter((i) => {
@@ -347,7 +371,11 @@ function LabStockSubTab() {
                         <div className="flex items-center justify-end gap-1">
                           <RowAction icon="plus" label="Restock" color="blue" onClick={() => setRestockItem(item)} />
                           <RowAction icon="edit" label="Edit" color="amber" onClick={() => setEditItem(item)} />
-                          <RowAction icon="trash" label="Delete" color="red" onClick={() => toast.error('Lab stock delete is not enabled in demo mode')} />
+                          <RowAction icon="trash" label="Delete" color="red" onClick={async () => {
+                            if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
+                            try { await delMut.mutateAsync(item.id); toast.success('Item deleted') }
+                            catch (err) { toast.error(err.message || 'Could not delete item') }
+                          }} />
                         </div>
                       </td>
                     </tr>
@@ -385,7 +413,7 @@ function LabStockSubTab() {
           onClose={() => setEditItem(null)}
           onSubmit={async (body) => {
             try {
-              await editMut.mutateAsync({ id: editItem.id, ...body, admin_name: user?.name || 'Admin' })
+              await editMut.mutateAsync({ id: editItem.id, ...body })
               toast.success('Lab item updated')
               setEditItem(null)
             } catch (err) {
@@ -399,7 +427,17 @@ function LabStockSubTab() {
         <AddLabItemModal loading={false} onClose={() => setShowAddLab(false)}
           onSubmit={async (body) => {
             try {
-              await api.post('/api/lab/stock', { ...body, admin_name: user?.name || 'Admin' })
+              await api.post('/api/admin/lab-stock', {
+                name: body.name,
+                category: body.category,
+                current_stock: Number(body.quantity),
+                reorder_level: Number(body.reorder_level) || 0,
+                unit: body.unit,
+                unit_cost: Number(body.unit_cost) || 0,
+                supplier: body.supplier || null,
+                batch_number: body.batch_number || null,
+                expiry_date: body.expiry_date || null,
+              })
               toast.success(`${body.name} added to lab inventory`)
               queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] })
               setShowAddLab(false)
@@ -414,33 +452,30 @@ function LabStockSubTab() {
 // ─── Sub-tab 2: Drug Stock ───────────────────────────────────────
 function DrugStockSubTab() {
   const queryClient = useQueryClient()
-  const user = useAuthStore((s) => s.user)
   const [restockItem, setRestockItem] = useState(null)
+  const [editItem, setEditItem] = useState(null)
   const [search, setSearch] = useState('')
   const [showAddDrug, setShowAddDrug] = useState(false)
 
   const q = useQuery({
     queryKey: ['admin', 'drug-stock'],
-    queryFn: async () => {
-      try {
-        const data = await api.get('/api/pharmacy/drugs')
-        if (Array.isArray(data?.items) && data.items.length > 0) return data
-        // Fallback to /api/pharmacy/stock if drugs endpoint is empty/unexpected
-        return await api.get('/api/pharmacy/stock')
-      } catch {
-        return await api.get('/api/pharmacy/stock')
-      }
-    },
+    queryFn: () => api.get('/api/admin/drug-stock'),
     staleTime: 30000,
   })
 
   const restockMut = useMutation({
-    mutationFn: ({ id, quantity }) => api.patch('/api/pharmacy/stock', { id, quantity }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] })
-      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'drugs'] })
-      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
-    },
+    mutationFn: ({ id, quantity }) => api.patch(`/api/admin/drug-stock/${id}/quantity`, { adjustment: quantity }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] }),
+  })
+
+  const editMut = useMutation({
+    mutationFn: ({ id, ...body }) => api.put(`/api/admin/drug-stock/${id}`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] }),
+  })
+
+  const delMut = useMutation({
+    mutationFn: (id) => api.delete(`/api/admin/drug-stock/${id}`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] }),
   })
 
   if (q.isLoading) {
@@ -460,7 +495,8 @@ function DrugStockSubTab() {
   const items = Array.isArray(q.data?.items) ? q.data.items : []
   const lowStock = items.filter((i) => (Number(i.current_stock) || 0) > 0 && (Number(i.current_stock) || 0) <= (Number(i.reorder_level) || 0))
   const outOfStock = items.filter((i) => (Number(i.current_stock) || 0) === 0)
-  const totalValue = items.reduce((s, i) => s + (Number(i.current_stock) || 0) * (Number(i.unit_price) || 0), 0)
+  // Inventory value at cost
+  const totalValue = items.reduce((s, i) => s + (Number(i.current_stock) || 0) * (Number(i.unit_cost) || 0), 0)
 
   const sq = search.trim().toLowerCase()
   const filtered = items.filter((i) => {
@@ -474,7 +510,7 @@ function DrugStockSubTab() {
         <StatTile label="Total Drugs" value={items.length} icon="pillBottle" color="blue" sublabel="SKUs" />
         <StatTile label="Low Stock" value={lowStock.length} icon="alert" color="amber" sublabel="need reorder" />
         <StatTile label="Out of Stock" value={outOfStock.length} icon="xCircle" color="red" sublabel="items" />
-        <StatTile label="Inventory Value" value={formatMoney(totalValue)} icon="dollarSign" color="green" sublabel="qty × unit price" />
+        <StatTile label="Inventory Value" value={formatMoney(totalValue)} icon="dollarSign" color="green" sublabel="qty × unit cost" />
       </div>
 
       <div className="relative">
@@ -504,7 +540,7 @@ function DrugStockSubTab() {
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
                   <Th>Drug</Th>
-                  <Th align="left" className="hidden md:table-cell">Unit</Th>
+                  <Th align="left" className="hidden md:table-cell">Category</Th>
                   <Th>Stock</Th>
                   <Th align="right" className="hidden lg:table-cell">Reorder</Th>
                   <Th align="right" className="hidden sm:table-cell">Unit Cost</Th>
@@ -518,12 +554,12 @@ function DrugStockSubTab() {
                 {filtered.map((item) => {
                   const st = statusFor(item)
                   const ex = expiryBadge(item.expiry_date)
-                  const retail = Number(item.pharmacy_normal_price) || Math.round((Number(item.unit_price) || 0) / 1.25)
+                  const retail = Number(item.normal_price) || 0  // OTC normal-tier sell price
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                       <td className="px-4 py-3">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.name}</p>
-                        <p className="text-[11px] text-gray-400">{item.generic_name}</p>
+                        <p className="text-[11px] text-gray-400">{item.generic_name || '—'}{item.strength ? ` · ${item.strength}` : ''}</p>
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
                         <Badge className={CATEGORY_BADGES[item.category] || CATEGORY_BADGES.other}>{cap(item.category)}</Badge>
@@ -533,7 +569,7 @@ function DrugStockSubTab() {
                         {item.reorder_level} {item.unit}
                       </td>
                       <td className="px-4 py-3 text-right text-[12px] text-gray-700 dark:text-gray-300 tabular-nums whitespace-nowrap hidden sm:table-cell">
-                        {formatMoney(item.unit_price)}
+                        {formatMoney(item.unit_cost)}
                       </td>
                       <td className="px-4 py-3 text-right text-[12px] text-emerald-700 dark:text-emerald-400 tabular-nums font-semibold whitespace-nowrap hidden sm:table-cell">
                         {formatMoney(retail)}
@@ -548,8 +584,12 @@ function DrugStockSubTab() {
                       <td className="px-4 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <RowAction icon="plus" label="Restock" color="blue" onClick={() => setRestockItem(item)} />
-                          <RowAction icon="edit" label="Edit" color="amber" onClick={() => toast('Drug editing is available in the Pharmacy → Stock tab', { icon: 'ℹ️' })} />
-                          <RowAction icon="trash" label="Delete" color="red" onClick={() => toast.error('Drug delete is not enabled in demo mode')} />
+                          <RowAction icon="edit" label="Edit" color="amber" onClick={() => setEditItem(item)} />
+                          <RowAction icon="trash" label="Delete" color="red" onClick={async () => {
+                            if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
+                            try { await delMut.mutateAsync(item.id); toast.success('Drug deleted') }
+                            catch (err) { toast.error(err.message || 'Could not delete drug') }
+                          }} />
                         </div>
                       </td>
                     </tr>
@@ -580,15 +620,46 @@ function DrugStockSubTab() {
         />
       )}
 
+      {editItem && (
+        <EditDrugItemModal
+          item={editItem}
+          loading={editMut.isPending}
+          onClose={() => setEditItem(null)}
+          onSubmit={async (body) => {
+            try {
+              await editMut.mutateAsync({ id: editItem.id, ...body })
+              toast.success('Drug updated')
+              setEditItem(null)
+            } catch (err) {
+              toast.error(err.message || 'Could not update drug')
+            }
+          }}
+        />
+      )}
+
       {showAddDrug && (
         <AddDrugModal loading={false} onClose={() => setShowAddDrug(false)}
           onSubmit={async (body) => {
             try {
-              await api.post('/api/pharmacy/stock', { ...body, admin_name: user?.name || 'Admin' })
+              await api.post('/api/admin/drug-stock', {
+                name: body.name,
+                generic_name: body.generic_name,
+                category: body.category,
+                form: body.form,
+                strength: body.strength,
+                current_stock: Number(body.quantity),
+                unit: body.unit,
+                reorder_level: Number(body.reorder_level) || 0,
+                unit_cost: Number(body.unit_cost) || 0,
+                normal_price: Number(body.normal_price) || 0,
+                promotional_price: Number(body.promotional_price) || 0,
+                wholesale_price: Number(body.wholesale_price) || 0,
+                supplier: body.supplier || null,
+                expiry_date: body.expiry_date || null,
+                batch_number: body.batch_number || null,
+              })
               toast.success(`${body.name} added to drug inventory`)
               queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] })
-              queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
-              queryClient.invalidateQueries({ queryKey: ['pharmacy', 'drugs'] })
               setShowAddDrug(false)
             } catch (err) { toast.error(err.message || 'Could not add drug') }
           }}
@@ -599,35 +670,36 @@ function DrugStockSubTab() {
 }
 
 // ─── Sub-tab 3: Charge Templates ─────────────────────────────────
-const TEMPLATE_CATEGORIES = [
-  { key: 'consultation', label: 'Consultation' },
-  { key: 'procedure', label: 'Procedure' },
-  { key: 'lab', label: 'Lab Test' },
-  { key: 'family_planning', label: 'Family Planning' },
-]
-
 function ChargeTemplatesSubTab() {
   const queryClient = useQueryClient()
-  const user = useAuthStore((s) => s.user)
   const [showAdd, setShowAdd] = useState(false)
   const [editingId, setEditingId] = useState(null)
 
   const q = useQuery({
     queryKey: ['admin', 'charge-templates'],
-    queryFn: () => api.get('/api/procedures'),
+    queryFn: () => api.get('/api/admin/charge-templates'),
     staleTime: 60000,
   })
 
   const addMut = useMutation({
-    mutationFn: (body) => api.post('/api/procedures', body),
+    mutationFn: (body) => api.post('/api/admin/charge-templates', {
+      name: body.name, category: body.category, amount: Number(body.price), is_active: body.is_active,
+    }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
   })
   const editMut = useMutation({
-    mutationFn: ({ id, body }) => api.patch(`/api/procedures/${id}`, body),
+    mutationFn: ({ id, body }) => {
+      const patch = {}
+      if (body.price != null) patch.amount = Number(body.price)
+      if (body.is_active != null) patch.is_active = body.is_active
+      if (body.name != null) patch.name = body.name
+      if (body.category != null) patch.category = body.category
+      return api.patch(`/api/admin/charge-templates/${id}`, patch)
+    },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
   })
   const delMut = useMutation({
-    mutationFn: (id) => api.delete(`/api/procedures/${id}`),
+    mutationFn: (id) => api.delete(`/api/admin/charge-templates/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
   })
 
@@ -645,12 +717,9 @@ function ChargeTemplatesSubTab() {
     return <ErrorState message={q.error?.message || 'Could not load charge templates'} onRetry={q.refetch} />
   }
 
-  const procedures = Array.isArray(q.data?.procedures) ? q.data.procedures : []
-  const fpMethods = Array.isArray(q.data?.familyPlanningMethods) ? q.data.familyPlanningMethods : []
-  const all = [
-    ...procedures.map((p) => ({ ...p, type: p.type || 'procedure' })),
-    ...fpMethods.map((m) => ({ ...m, type: 'family_planning' })),
-  ]
+  // Single ChargeTemplate table. Alias amount -> price for the existing UI.
+  const templates = Array.isArray(q.data?.templates) ? q.data.templates : []
+  const all = templates.map((t) => ({ ...t, price: t.amount }))
 
   // Group by category
   const groups = {}
@@ -659,7 +728,7 @@ function ChargeTemplatesSubTab() {
     if (!groups[key]) groups[key] = []
     groups[key].push(t)
   }
-  const groupOrder = ['consultation', 'procedure', 'lab', 'family_planning', 'other']
+  const groupOrder = ['consultation', 'procedure', 'lab', 'medication']
   const sortedGroups = Object.entries(groups).sort((a, b) => {
     const ai = groupOrder.indexOf(a[0])
     const bi = groupOrder.indexOf(b[0])
@@ -722,7 +791,7 @@ function ChargeTemplatesSubTab() {
                         onEdit={() => setEditingId(editingId === t.id ? null : t.id)}
                         onToggle={async () => {
                           try {
-                            await editMut.mutateAsync({ id: t.id, body: { is_active: !t.is_active, admin_name: user?.name || 'Admin' } })
+                            await editMut.mutateAsync({ id: t.id, body: { is_active: !t.is_active } })
                             toast.success(`${t.name} ${t.is_active ? 'deactivated' : 'activated'}`)
                           } catch (err) {
                             toast.error(err.message || 'Could not update template')
@@ -730,7 +799,7 @@ function ChargeTemplatesSubTab() {
                         }}
                         onSave={async (price) => {
                           try {
-                            await editMut.mutateAsync({ id: t.id, body: { price: Number(price), admin_name: user?.name || 'Admin' } })
+                            await editMut.mutateAsync({ id: t.id, body: { price: Number(price) } })
                             toast.success(`${t.name} amount updated`)
                             setEditingId(null)
                           } catch (err) {
@@ -762,7 +831,7 @@ function ChargeTemplatesSubTab() {
           onClose={() => setShowAdd(false)}
           onSubmit={async (body) => {
             try {
-              await addMut.mutateAsync({ ...body, admin_name: user?.name || 'Admin' })
+              await addMut.mutateAsync(body)
               toast.success('Template added')
               setShowAdd(false)
             } catch (err) {
@@ -788,7 +857,7 @@ function ChargeTemplateRow({ template, isEditing, loading, onEdit, onToggle, onS
     <tr className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
       <td className="px-4 py-3">
         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{template.name}</p>
-        <p className="text-[10px] text-gray-400 uppercase tracking-wider">{template.type === 'family_planning' ? 'Family Planning' : cap(template.type)}</p>
+        <p className="text-[10px] text-gray-400 uppercase tracking-wider sm:hidden">{cap(template.category)}</p>
       </td>
       <td className="px-4 py-3 hidden sm:table-cell">
         <Badge className={CATEGORY_BADGES[template.category] || CATEGORY_BADGES.other}>{cap(template.category)}</Badge>
@@ -855,7 +924,6 @@ function AddTemplateModal({ loading, onClose, onSubmit }) {
   const [name, setName] = useState('')
   const [category, setCategory] = useState('procedure')
   const [price, setPrice] = useState('')
-  const [type, setType] = useState('procedure')
   const [isActive, setIsActive] = useState(true)
 
   const handleSubmit = async (e) => {
@@ -869,7 +937,7 @@ function AddTemplateModal({ loading, onClose, onSubmit }) {
       toast.error('Amount must be a non-negative number')
       return
     }
-    await onSubmit({ name: name.trim(), category, price: numPrice, type, is_active: isActive })
+    await onSubmit({ name: name.trim(), category, price: numPrice, is_active: isActive })
   }
 
   return (
@@ -906,12 +974,7 @@ function AddTemplateModal({ loading, onClose, onSubmit }) {
           <Field label="Category *">
             <select
               value={category}
-              onChange={(e) => {
-                setCategory(e.target.value)
-                // Auto-align type with category for family planning
-                if (e.target.value === 'family_planning') setType('family_planning')
-                else setType('procedure')
-              }}
+              onChange={(e) => setCategory(e.target.value)}
               className={inputCls}
             >
               {TEMPLATE_CATEGORIES.map((c) => (
@@ -931,25 +994,6 @@ function AddTemplateModal({ loading, onClose, onSubmit }) {
             />
           </Field>
         </div>
-        <Field label="Type">
-          <div className="flex items-center gap-2">
-            {['procedure', 'family_planning'].map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setType(t)}
-                className={[
-                  'flex-1 px-3 py-2 rounded-lg text-[12px] font-medium border transition-colors',
-                  type === t
-                    ? 'bg-[#1a6cbf] text-white border-[#1a6cbf]'
-                    : 'bg-white dark:bg-[#0f172a] text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-600',
-                ].join(' ')}
-              >
-                {t === 'family_planning' ? 'Family Planning' : 'Procedure / Lab'}
-              </button>
-            ))}
-          </div>
-        </Field>
         <Field label="Status">
           <label className="flex items-center gap-2 cursor-pointer">
             <input
@@ -1007,14 +1051,12 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
               {item.reorder_level} {item.unit}
             </span>
           </div>
-          {item.unit_price != null && (
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-gray-500 dark:text-gray-400">Unit cost</span>
-              <span className="text-[12px] font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-                {formatMoney(item.unit_price)}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-gray-500 dark:text-gray-400">Unit cost</span>
+            <span className="text-[12px] font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+              {formatMoney(item.unit_cost)}
+            </span>
+          </div>
           {item.supplier && (
             <div className="flex items-center justify-between">
               <span className="text-[11px] text-gray-500 dark:text-gray-400">Supplier</span>
@@ -1033,14 +1075,14 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
             autoFocus
           />
           <div className="flex items-center gap-2 mt-2 flex-wrap">
-            {[10, 50, 100, 200].map((q) => (
+            {[10, 50, 100, 200].map((qv) => (
               <button
-                key={q}
+                key={qv}
                 type="button"
-                onClick={() => setQuantity(q)}
+                onClick={() => setQuantity(qv)}
                 className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
               >
-                +{q}
+                +{qv}
               </button>
             ))}
             <button
@@ -1060,14 +1102,12 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
               {newStock} {item.unit}
             </span>
           </div>
-          {item.unit_price != null && (
-            <div className="flex items-center justify-between">
-              <span className="text-[11px] text-gray-500 dark:text-gray-400">New stock value</span>
-              <span className="text-[12px] font-semibold tabular-nums text-[#1a6cbf] dark:text-blue-400">
-                {formatMoney(newStock * (Number(item.unit_price) || 0))}
-              </span>
-            </div>
-          )}
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-gray-500 dark:text-gray-400">New stock value (at cost)</span>
+            <span className="text-[12px] font-semibold tabular-nums text-[#1a6cbf] dark:text-blue-400">
+              {formatMoney(newStock * (Number(item.unit_cost) || 0))}
+            </span>
+          </div>
         </div>
       </form>
     </ModalShell>
@@ -1159,6 +1199,285 @@ function EditLabItemModal({ item, loading, onClose, onSubmit }) {
   )
 }
 
+// ─── Edit drug item modal (metadata + price tiers, NOT stock) ────
+function EditDrugItemModal({ item, loading, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    name: item.name || '',
+    generic_name: item.generic_name || '',
+    category: item.category || 'general',
+    form: item.form || 'tablet',
+    strength: item.strength || '',
+    unit: item.unit || 'tablets',
+    reorder_level: String(item.reorder_level ?? 0),
+    unit_cost: String(item.unit_cost ?? 0),
+    normal_price: String(item.normal_price ?? 0),
+    promotional_price: String(item.promotional_price ?? 0),
+    wholesale_price: String(item.wholesale_price ?? 0),
+    supplier: item.supplier || '',
+    batch_number: item.batch_number || '',
+    expiry_date: item.expiry_date ? new Date(item.expiry_date).toISOString().slice(0, 10) : '',
+  })
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!form.name.trim()) { toast.error('Drug name is required'); return }
+    const rl = Number(form.reorder_level)
+    if (!Number.isFinite(rl) || rl < 0) { toast.error('Reorder level must be a non-negative number'); return }
+    await onSubmit({
+      name: form.name.trim(),
+      generic_name: form.generic_name.trim(),
+      category: form.category,
+      form: form.form,
+      strength: form.strength,
+      unit: form.unit,
+      reorder_level: rl,
+      unit_cost: Number(form.unit_cost) || 0,
+      normal_price: Number(form.normal_price) || 0,
+      promotional_price: Number(form.promotional_price) || 0,
+      wholesale_price: Number(form.wholesale_price) || 0,
+      supplier: form.supplier,
+      batch_number: form.batch_number,
+      expiry_date: form.expiry_date ? new Date(form.expiry_date).toISOString() : null,
+    })
+  }
+
+  return (
+    <ModalShell
+      title="Edit Drug"
+      subtitle={item.name}
+      onClose={loading ? undefined : onClose}
+      maxWidth="max-w-lg"
+      footer={
+        <>
+          <button type="button" onClick={onClose} disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
+            Cancel
+          </button>
+          <button type="submit" form="edit-drug-form" disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
+            {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
+            {loading ? 'Saving…' : 'Save Changes'}
+          </button>
+        </>
+      }
+    >
+      <form id="edit-drug-form" onSubmit={handleSubmit} className="space-y-3">
+        <Field label="Drug Name *">
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} className={inputCls} autoFocus />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Generic Name">
+            <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Category">
+            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
+              {optionsFrom(DRUG_CATEGORIES)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Form">
+            <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
+              {optionsFrom(DRUG_FORMS)}
+            </select>
+          </Field>
+          <Field label="Strength">
+            <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
+          </Field>
+          <Field label="Unit">
+            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} className={inputCls} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Reorder Level *">
+            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Unit Cost (KSh)" hint="Buying / cost price">
+            <input type="number" min="0" step="any" value={form.unit_cost} onChange={(e) => set('unit_cost', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Normal (KSh)">
+            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Promotional">
+            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Wholesale">
+            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Supplier">
+            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} className={inputCls} />
+          </Field>
+          <Field label="Batch Number">
+            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} className={inputCls} />
+          </Field>
+        </div>
+        <Field label="Expiry Date">
+          <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
+        </Field>
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
+          <Icon name="info" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            Stock quantity is changed via the Restock action, not here. The clinic prescription price is computed at billing from the Normal price × (1 + markup %).
+          </p>
+        </div>
+      </form>
+    </ModalShell>
+  )
+}
+
+// ─── Add Lab Item Modal ─────────────────────────────────────────
+function AddLabItemModal({ loading, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    name: '', category: 'supplies', quantity: '', unit: 'vials',
+    reorder_level: '10', unit_cost: '', supplier: '', expiry_date: '', batch_number: '',
+  })
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+  const valid = form.name.trim() && form.quantity !== ''
+  return (
+    <ModalShell title="Add Lab Stock Item" subtitle="Create a new lab reagent or supply" onClose={onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
+          <button onClick={() => onSubmit(form)} disabled={loading || !valid} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2">
+            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Item
+          </button>
+        </div>
+      }>
+      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
+        <Field label="Item Name *">
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Hemoglobin Reagent" className={inputCls} autoFocus />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Category">
+            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
+              {optionsFrom(LAB_CATEGORIES)}
+            </select>
+          </Field>
+          <Field label="Unit">
+            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} placeholder="vials, boxes, packs" className={inputCls} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quantity *">
+            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Reorder Level">
+            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Expiry Date">
+            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Batch Number">
+            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. HB-25-03" className={inputCls} />
+          </Field>
+        </div>
+      </form>
+    </ModalShell>
+  )
+}
+
+// ─── Add Drug Modal ──────────────────────────────────────────────
+function AddDrugModal({ loading, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    name: '', generic_name: '', category: 'antibiotic', form: 'tablet', strength: '',
+    quantity: '', unit: 'tablets', reorder_level: '50',
+    unit_cost: '', normal_price: '', promotional_price: '', wholesale_price: '',
+    supplier: '', expiry_date: '', batch_number: '',
+  })
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
+  const valid = form.name.trim() && form.quantity !== ''
+  return (
+    <ModalShell title="Add Drug to Inventory" subtitle="Create a new drug stock item" onClose={onClose} maxWidth="max-w-lg"
+      footer={
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
+          <button onClick={() => onSubmit(form)} disabled={loading || !valid} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2">
+            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Drug
+          </button>
+        </div>
+      }>
+      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
+        <Field label="Drug Name *">
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Amoxicillin 500mg" className={inputCls} autoFocus />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Generic Name">
+            <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} placeholder="e.g. Amoxicillin" className={inputCls} />
+          </Field>
+          <Field label="Category">
+            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
+              {optionsFrom(DRUG_CATEGORIES)}
+            </select>
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Form">
+            <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
+              {optionsFrom(DRUG_FORMS)}
+            </select>
+          </Field>
+          <Field label="Strength">
+            <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
+          </Field>
+          <Field label="Unit">
+            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} className={inputCls} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quantity *">
+            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Reorder Level">
+            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Unit Cost (KSh)" hint="Buying / cost price">
+            <input type="number" min="0" step="any" value={form.unit_cost} onChange={(e) => set('unit_cost', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Expiry Date">
+            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Field label="Normal (KSh)" hint="OTC price">
+            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Promotional">
+            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Wholesale">
+            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Supplier">
+            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Phillips Pharma" className={inputCls} />
+          </Field>
+          <Field label="Batch Number">
+            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. AMX2025-04" className={inputCls} />
+          </Field>
+        </div>
+        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-start gap-2">
+          <Icon name="info" size={14} className="text-[#1a6cbf] dark:text-blue-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-gray-600 dark:text-gray-300">
+            Normal / Promotional / Wholesale are the three OTC sale tiers. The clinic prescription price is computed at billing from Normal × (1 + markup %) — it is not stored here.
+          </p>
+        </div>
+      </form>
+    </ModalShell>
+  )
+}
+
 // ─── Sub-tab 4: Restock Verification ─────────────────────────────
 function RestockVerificationSubTab() {
   const queryClient = useQueryClient()
@@ -1190,7 +1509,7 @@ function RestockVerificationSubTab() {
   if (q.isLoading) {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-4 gap-3">{Array.from({length:4}).map((_,i)=><SkeletonCard key={i}/>)}</div>
+        <div className="grid grid-cols-4 gap-3">{Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}</div>
         <SkeletonList items={3} />
       </div>
     )
@@ -1203,7 +1522,7 @@ function RestockVerificationSubTab() {
 
   const handleVerify = async (r, notes, qty) => {
     try {
-      const body = { verified_by: user?.name || 'Admin', verification_notes: notes }
+      const body = { verification_notes: notes }
       if (qty != null && Number(qty) !== r.received_qty) body.adjusted_qty = Number(qty)
       await verifyMut.mutateAsync({ id: r.id, body })
       toast.success(`${r.item_name} verified — stock added`)
@@ -1213,7 +1532,7 @@ function RestockVerificationSubTab() {
 
   const handleReject = async (r, reason) => {
     try {
-      await rejectMut.mutateAsync({ id: r.id, body: { verified_by: user?.name || 'Admin', verification_notes: reason } })
+      await rejectMut.mutateAsync({ id: r.id, body: { verification_notes: reason } })
       toast.success(`${r.item_name} rejected — no stock added`)
       setRejecting(null)
     } catch (err) { toast.error(err.message || 'Could not reject') }
@@ -1229,7 +1548,7 @@ function RestockVerificationSubTab() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        {['all','pending','approved','rejected'].map((f) => {
+        {['all', 'pending', 'approved', 'rejected'].map((f) => {
           const count = f === 'all' ? all.length : all.filter((r) => r.status === f).length
           return (
             <button key={f} onClick={() => setFilter(f)}
@@ -1314,7 +1633,7 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
   const [notes, setNotes] = useState('')
   const [qty, setQty] = useState(String(restock.received_qty))
   return (
-    <ModalShell title="Verify Restock" subtitle={`${restock.item_name} · ${cap(restock.department)}`} onClose={onClose} loading={loading}
+    <ModalShell title="Verify Restock" subtitle={`${restock.item_name} · ${cap(restock.department)}`} onClose={loading ? undefined : onClose}
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
@@ -1327,7 +1646,7 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
         <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 p-3 space-y-1.5 text-[12px]">
           <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Requested:</span><span className="font-medium">{restock.requested_qty}</span></div>
-          <div className="flex justify-between"><span className="text-gray-400">Supplier:</span><span className="font-medium">{restock.supplier}</span></div>
+          <div className="flex justify-between"><span className="text-gray-400">Supplier:</span><span className="font-medium">{restock.supplier || '—'}</span></div>
         </div>
         <div>
           <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Quantity to add (adjust if different)</label>
@@ -1345,7 +1664,7 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
 function RestockRejectModal({ restock, loading, onClose, onConfirm }) {
   const [reason, setReason] = useState('')
   return (
-    <ModalShell title="Reject Restock" subtitle={`${restock.item_name} · no stock will be added`} onClose={onClose} loading={loading}
+    <ModalShell title="Reject Restock" subtitle={`${restock.item_name} · no stock will be added`} onClose={loading ? undefined : onClose}
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
@@ -1359,186 +1678,6 @@ function RestockRejectModal({ restock, loading, onClose, onConfirm }) {
       </div>
       <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Reason for rejection *</label>
       <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="e.g. Wrong quantity received, damaged packaging..." className={`${inputCls} resize-none`} />
-    </ModalShell>
-  )
-}
-
-// ─── Add Lab Item Modal ─────────────────────────────────────────
-function AddLabItemModal({ loading, onClose, onSubmit }) {
-  const [form, setForm] = useState({
-    name: '', category: 'supplies', quantity: '', unit: 'vials',
-    reorder_level: '10', unit_cost: '', supplier: '', expiry_date: '', batch_number: '',
-  })
-  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
-  const valid = form.name.trim() && form.quantity
-  return (
-    <ModalShell title="Add Lab Stock Item" subtitle="Create a new lab reagent or supply" onClose={onClose} loading={loading}
-      footer={
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
-          <button onClick={() => onSubmit(form)} disabled={loading || !valid} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2">
-            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Item
-          </button>
-        </div>
-      }>
-      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Item Name *</label>
-          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Hemoglobin Reagent" className={inputCls} autoFocus />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Category</label>
-            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
-              <option value="supplies">Supplies</option>
-              <option value="hematology">Hematology</option>
-              <option value="chemistry">Chemistry</option>
-              <option value="urinalysis">Urinalysis</option>
-              <option value="microbiology">Microbiology</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Unit</label>
-            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} placeholder="vials, boxes, packs" className={inputCls} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Quantity *</label>
-            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Reorder Level</label>
-            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Unit Cost (KSh)</label>
-            <input type="number" min="0" step="any" value={form.unit_cost} onChange={(e) => set('unit_cost', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Expiry Date</label>
-            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Supplier</label>
-            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Siemens" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Batch Number</label>
-            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. HB-25-03" className={inputCls} />
-          </div>
-        </div>
-      </form>
-    </ModalShell>
-  )
-}
-
-// ─── Add Drug Modal ──────────────────────────────────────────────
-function AddDrugModal({ loading, onClose, onSubmit }) {
-  const [form, setForm] = useState({
-    name: '', generic_name: '', category: 'antibiotic', form: 'tablet', strength: '',
-    quantity: '', unit: 'tablets', reorder_level: '50', unit_price: '',
-    supplier: '', expiry_date: '', batch_number: '',
-  })
-  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
-  const valid = form.name.trim() && form.quantity
-  const clinicPrice = Number(form.unit_price) || 0
-  const pharmacyPrice = Math.round(clinicPrice / 1.25)
-  return (
-    <ModalShell title="Add Drug to Inventory" subtitle="Create a new drug stock item" onClose={onClose} loading={loading}
-      footer={
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
-          <button onClick={() => onSubmit(form)} disabled={loading || !valid} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2">
-            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Drug
-          </button>
-        </div>
-      }>
-      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Drug Name *</label>
-          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Amoxicillin 500mg" className={inputCls} autoFocus />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Generic Name</label>
-            <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} placeholder="e.g. Amoxicillin" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Category</label>
-            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
-              <option value="antibiotic">Antibiotic</option>
-              <option value="analgesic">Analgesic</option>
-              <option value="antihypertensive">Antihypertensive</option>
-              <option value="antidiabetic">Antidiabetic</option>
-              <option value="antacid">Antacid</option>
-              <option value="antihistamine">Antihistamine</option>
-              <option value="supplement">Supplement</option>
-              <option value="family_planning">Family Planning</option>
-              <option value="thyroid">Thyroid</option>
-              <option value="general">General</option>
-            </select>
-          </div>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Form</label>
-            <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
-              <option value="tablet">Tablet</option>
-              <option value="capsule">Capsule</option>
-              <option value="injection">Injection</option>
-              <option value="syrup">Syrup</option>
-              <option value="cream">Cream</option>
-              <option value="drops">Drops</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Strength</label>
-            <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Unit</label>
-            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} className={inputCls} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Quantity *</label>
-            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Reorder Level</label>
-            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Clinic Price (KSh) *</label>
-            <input type="number" min="0" step="any" value={form.unit_price} onChange={(e) => set('unit_price', e.target.value)} placeholder="e.g. 15" className={`${inputCls} tabular-nums`} />
-            {clinicPrice > 0 && (
-              <p className="text-[10px] text-gray-400 mt-1">Pharmacy: KSh {pharmacyPrice} · Promo: KSh {Math.round(pharmacyPrice * 0.9)} · Wholesale: KSh {Math.round(pharmacyPrice * 0.8)}</p>
-            )}
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Expiry Date</label>
-            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Supplier</label>
-            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Phillips Pharma" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Batch Number</label>
-            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. AMX2025-04" className={inputCls} />
-          </div>
-        </div>
-      </form>
     </ModalShell>
   )
 }

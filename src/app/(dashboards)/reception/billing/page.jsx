@@ -1,13 +1,16 @@
 'use client'
 
 // BillingTab — stage 2 billing desk
-// API: GET /api/reception/payments → list bills (includes visit_status)
+// API: GET /api/reception/bills → list bills (includes visit_status + payments)
 //      PATCH /api/reception/payments → collect stage 2 payment
 //
 // IMPORTANT: Stage 2 collection is only allowed when the patient has
 // completed all services (lab, pharmacy) and returned to reception with
 // status = 'billing'. Bills for patients still in process show a "Not ready"
 // indicator and cannot be collected.
+//
+// Receipts are printed MANUALLY via the printer button on a row — never
+// automatically after collection.
 
 import { useState } from 'react'
 import toast from 'react-hot-toast'
@@ -18,6 +21,7 @@ import {
   badgeClass, cap, formatMoney, formatTime,
 } from '@/utils/helpers'
 import { PaymentModal } from '@/components/reception/paymentModal'
+import { ReceiptModal } from '@/components/reception/ReceiptModal'
 
 // Map visit status → friendly location label for "not ready" bills
 const WHERE_LABEL = {
@@ -33,8 +37,9 @@ const WHERE_LABEL = {
 export default function BillingTab() {
   const queryClient = useQueryClient()
   const [paying, setPaying] = useState(null)
+  const [receiptBill, setReceiptBill] = useState(null)
 
-  // API: GET /api/reception/payments
+  // API: GET /api/reception/bills
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['reception', 'payments'],
     queryFn: () => api.get('/api/reception/bills'),
@@ -63,6 +68,8 @@ export default function BillingTab() {
       })
       toast.success(`Payment collected from ${bill.patient_name}`)
       setPaying(null)
+      // Auto-open receipt immediately after payment so receptionist can print
+      setReceiptBill({ ...bill, status: 'paid', paid_amount: bill.total_amount, method })
     } catch (err) {
       toast.error(err.message || 'Payment failed')
     }
@@ -136,8 +143,11 @@ export default function BillingTab() {
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatMoney(b.total_amount - b.paid_amount)}</td>
                       <td className="px-4 py-3 text-center"><Badge className={badgeClass(b.status)}>{cap(b.status)}</Badge></td>
                       <td className="px-4 py-3 text-right">
-                        <button onClick={() => setPaying(b)}
-                          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 ml-auto">
+                        {/* No printer button here — receipt only available after payment */}
+                        <button
+                          onClick={() => setPaying(b)}
+                          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 ml-auto"
+                        >
                           <Icon name="dollarSign" size={13} /> Collect
                         </button>
                       </td>
@@ -239,9 +249,19 @@ export default function BillingTab() {
                         <span className="text-[11px] text-gray-500 dark:text-gray-400 capitalize">{b.method || '—'}</span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                          <Icon name="check" size={11} /> Paid
-                        </Badge>
+                        <div className="flex items-center justify-end gap-2">
+                          <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                            <Icon name="check" size={11} /> Paid
+                          </Badge>
+                          {/* Printer button only available on fully paid bills */}
+                          <button
+                            onClick={() => setReceiptBill(b)}
+                            title="Print receipt"
+                            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 hover:text-[#1a6cbf] hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-gray-200 dark:border-gray-700 transition-colors"
+                          >
+                            <Icon name="printer" size={13} />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -280,6 +300,11 @@ export default function BillingTab() {
           onClose={() => setPaying(null)}
           onConfirm={handlePay}
         />
+      )}
+
+      {/* Receipt modal — only opens after payment or from completed rows */}
+      {receiptBill && (
+        <ReceiptModal bill={receiptBill} onClose={() => setReceiptBill(null)} />
       )}
     </div>
   )

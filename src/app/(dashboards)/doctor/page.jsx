@@ -50,7 +50,7 @@ export default function QueueTab({ onStartConsultation }) {
 
     return () => {
       socket.off('visit:new')
-      socket.off('visit:status_changed')
+      socket.off('lab:results_ready')
     }
   }, [])
 

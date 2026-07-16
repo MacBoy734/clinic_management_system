@@ -19,17 +19,10 @@ import {
 import socket from '@/lib/socket'
 import { ResultsModal } from '@/components/lab/ResultsModal'
 
-// ─── Client-side shaping ───────────────────────────────────────────────────────
-// The backend already returns a flat response — patient_name, patient_age,
-// patient_gender, ordered_by, ordered_at are all top-level fields.
-// shapeReq only needs to:
-//   1. Alias `allergies` → `patient_allergies` (what QueueCard reads)
-//   2. Hoist result_template from item.catalog onto each item directly
 
 function shapeReq(raw) {
   return {
     ...raw,
-    // QueueCard reads req.patient_allergies — API returns req.allergies
     patient_allergies: raw.allergies ?? null,
     // Items — hoist result_template up from catalog for convenience
     items: (raw.items ?? []).map((item) => ({
@@ -55,14 +48,9 @@ export default function QueueTab() {
       queryClient.invalidateQueries({ queryKey: ['lab', 'queue'] })
       queryClient.invalidateQueries({ queryKey: ['lab', 'stats'] })
     })
-    socket.on('visit:status_changed', () => {
-      queryClient.invalidateQueries({ queryKey: ['lab', 'queue'] })
-      queryClient.invalidateQueries({ queryKey: ['lab', 'stats'] })
-    })
 
     return () => {
       socket.off('visit:new')
-      socket.off('visit:status_changed')
     }
   }, [])
 
@@ -103,7 +91,7 @@ export default function QueueTab() {
     try {
       await statusMut.mutateAsync({
         id: req.id,
-        body: { status: 'in_progress', tech_id: Number(user?.id) || 4 },
+        body: { status: 'in_progress' },
       })
       toast.success(`${req.patient_name} — tests now in progress`)
     } catch (err) {
@@ -118,7 +106,6 @@ export default function QueueTab() {
         body: {
           status: saveStatus,
           item_results: itemResults,
-          tech_id: Number(user?.id) || 4,
         },
       })
       if (saveStatus === 'ready') {
@@ -267,7 +254,6 @@ function QueueCard({ req, onStart, onEnterResults, starting }) {
               <span className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">
                 {req.patient_name}
               </span>
-              {/* age — computed from date_of_birth via shapeReq */}
               {req.patient_age !== null && (
                 <span className="text-[11px] text-gray-500 dark:text-gray-400">
                   {req.patient_age}y · {cap(req.patient_gender || '—')}

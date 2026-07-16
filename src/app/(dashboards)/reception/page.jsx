@@ -14,8 +14,7 @@ const STATUS_FILTERS = ['all', 'waiting', 'consultation_paid', 'with_doctor', 'l
 
 // ─── Register modal ───────────────────────────────────────────────────────────
 const EMPTY_PATIENT = {
-  name: '', gender: 'male', phone: '', national_id: '', blood_group: '',
-  allergies: '', date_of_birth: '',
+  name: '', gender: 'male', phone: '', national_id: '', age: '',
 }
 
 const inputCls = 'w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]'
@@ -163,7 +162,6 @@ function RegisterModal({ onClose }) {
   const queryClient = useQueryClient()
   const [patient, setPatient] = useState(EMPTY_PATIENT)
   const [visitType, setVisitType] = useState('consultation')
-  const [chiefComplaint, setChiefComplaint] = useState('')
   const [referredBy, setReferredBy] = useState('')
   const [referrerPhone, setReferrerPhone] = useState('')
   const [selectedTests, setSelectedTests] = useState([])
@@ -200,7 +198,7 @@ function RegisterModal({ onClose }) {
         national_id: patient.national_id || null,
         blood_group: patient.blood_group || null,
         allergies: patient.allergies || null,
-        date_of_birth: patient.date_of_birth || null,
+        age: patient.age ? Number(patient.age) : null,
       },
       visit_type: visitType,
       referred_by: visitType === 'direct_lab' ? (referredBy || null) : null,
@@ -285,35 +283,20 @@ function RegisterModal({ onClose }) {
                   <option value="other">Other</option>
                 </select>
               </Field>
+              <Field label="Age *">
+                <input type="number" value={patient.age}
+                  onChange={(e) => setPatient({ ...patient, age: e.target.value })}
+                  placeholder="e.g. 30" className={inputCls} required min={1} max={110} />
+              </Field>
               <Field label="Phone">
                 <input type="tel" value={patient.phone}
                   onChange={(e) => setPatient({ ...patient, phone: e.target.value })}
                   placeholder="07XX XXX XXX" className={inputCls} />
               </Field>
-              <Field label="Date of Birth">
-                <input type="date" value={patient.date_of_birth}
-                  onChange={(e) => setPatient({ ...patient, date_of_birth: e.target.value })}
-                  className={inputCls} />
-              </Field>
               <Field label="National ID">
                 <input type="text" value={patient.national_id}
                   onChange={(e) => setPatient({ ...patient, national_id: e.target.value })}
                   placeholder="Optional" className={inputCls} />
-              </Field>
-              <Field label="Blood Group">
-                <select value={patient.blood_group}
-                  onChange={(e) => setPatient({ ...patient, blood_group: e.target.value })}
-                  className={inputCls}>
-                  <option value="">Unknown</option>
-                  {['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'].map((bg) => (
-                    <option key={bg} value={bg}>{bg}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Known Allergies">
-                <input type="text" value={patient.allergies}
-                  onChange={(e) => setPatient({ ...patient, allergies: e.target.value })}
-                  placeholder="e.g. Penicillin (optional)" className={inputCls} />
               </Field>
             </div>
           </div>

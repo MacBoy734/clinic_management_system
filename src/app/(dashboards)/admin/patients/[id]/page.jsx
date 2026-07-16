@@ -19,8 +19,8 @@ import api from '@/lib/api'
 function usePatientDetail(id) {
   return useQuery({
     queryKey: ['admin', 'patient-detail', id],
-    queryFn:  () => api.get(`/api/admin/patients/${id}`),
-    enabled:  !!id,
+    queryFn: () => api.get(`/api/admin/patients/${id}`),
+    enabled: !!id,
     staleTime: 60000,
   })
 }
@@ -28,54 +28,54 @@ function usePatientDetail(id) {
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const VISIT_TYPE_LABELS = {
-  consultation:   'Consultation',
-  direct_lab:     'Direct Lab',
-  injection:      'Injection',
-  family_planning:'Family Planning',
+  consultation: 'Consultation',
+  direct_lab: 'Direct Lab',
+  injection: 'Injection',
+  family_planning: 'Family Planning',
 }
 
 const VISIT_TYPE_COLORS = {
-  consultation:   'bg-blue-50   dark:bg-blue-900/20   text-blue-700   dark:text-blue-400   border-blue-100   dark:border-blue-800/40',
-  direct_lab:     'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border-purple-100 dark:border-purple-800/40',
-  injection:      'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 border-orange-100 dark:border-orange-800/40',
-  family_planning:'bg-pink-50   dark:bg-pink-900/20   text-pink-700   dark:text-pink-400   border-pink-100   dark:border-pink-800/40',
+  consultation: 'bg-blue-50   dark:bg-blue-900/20   text-blue-700   dark:text-blue-400   border-blue-100   dark:border-blue-800/40',
+  direct_lab: 'bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400 border-purple-100 dark:border-purple-800/40',
+  injection: 'bg-orange-50 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 border-orange-100 dark:border-orange-800/40',
+  family_planning: 'bg-pink-50   dark:bg-pink-900/20   text-pink-700   dark:text-pink-400   border-pink-100   dark:border-pink-800/40',
 }
 
 const VISIT_STATUS_COLORS = {
-  waiting:          'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
-  consultation_paid:'bg-cyan-50    dark:bg-cyan-900/20    text-cyan-700    dark:text-cyan-400',
-  with_doctor:      'bg-blue-50    dark:bg-blue-900/20    text-blue-700    dark:text-blue-400',
-  lab:              'bg-purple-50  dark:bg-purple-900/20  text-purple-700  dark:text-purple-400',
-  pharmacy:         'bg-teal-50    dark:bg-teal-900/20    text-teal-700    dark:text-teal-400',
-  billing:          'bg-orange-50  dark:bg-orange-900/20  text-orange-700  dark:text-orange-400',
-  done:             'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
-  archived:         'bg-gray-100   dark:bg-gray-700/40    text-gray-500    dark:text-gray-400',
+  waiting: 'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
+  consultation_paid: 'bg-cyan-50    dark:bg-cyan-900/20    text-cyan-700    dark:text-cyan-400',
+  with_doctor: 'bg-blue-50    dark:bg-blue-900/20    text-blue-700    dark:text-blue-400',
+  lab: 'bg-purple-50  dark:bg-purple-900/20  text-purple-700  dark:text-purple-400',
+  pharmacy: 'bg-teal-50    dark:bg-teal-900/20    text-teal-700    dark:text-teal-400',
+  billing: 'bg-orange-50  dark:bg-orange-900/20  text-orange-700  dark:text-orange-400',
+  done: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
+  archived: 'bg-gray-100   dark:bg-gray-700/40    text-gray-500    dark:text-gray-400',
 }
 
 const FEE_STATUS_COLORS = {
-  paid:    'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800/40',
+  paid: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800/40',
   pending: 'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400   border-amber-100   dark:border-amber-800/40',
-  waived:  'bg-gray-50    dark:bg-gray-800/40    text-gray-500    dark:text-gray-400    border-gray-200    dark:border-gray-700/40',
+  waived: 'bg-gray-50    dark:bg-gray-800/40    text-gray-500    dark:text-gray-400    border-gray-200    dark:border-gray-700/40',
 }
 
 const LAB_STATUS_COLORS = {
-  pending:     'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
+  pending: 'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
   in_progress: 'bg-blue-50    dark:bg-blue-900/20    text-blue-700    dark:text-blue-400',
-  ready:       'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
+  ready: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
 }
 
 const RX_STATUS_COLORS = {
-  pending:   'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
+  pending: 'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400',
   dispensed: 'bg-blue-50    dark:bg-blue-900/20    text-blue-700    dark:text-blue-400',
-  issued:    'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
-  returned:  'bg-orange-50  dark:bg-orange-900/20  text-orange-700  dark:text-orange-400',
+  issued: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
+  returned: 'bg-orange-50  dark:bg-orange-900/20  text-orange-700  dark:text-orange-400',
   cancelled: 'bg-red-50     dark:bg-red-900/20     text-red-700     dark:text-red-400',
 }
 
 const URGENCY_COLORS = {
   routine: 'bg-gray-100   dark:bg-gray-700/40 text-gray-600   dark:text-gray-400',
-  urgent:  'bg-amber-100  dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
-  stat:    'bg-red-100    dark:bg-red-900/30   text-red-700   dark:text-red-400',
+  urgent: 'bg-amber-100  dark:bg-amber-900/30 text-amber-700 dark:text-amber-400',
+  stat: 'bg-red-100    dark:bg-red-900/30   text-red-700   dark:text-red-400',
 }
 
 const METHOD_LABELS = { cash: 'Cash', mpesa: 'M-Pesa', insurance: 'Insurance', other: 'Other' }
@@ -109,11 +109,11 @@ function timeAgo(iso) {
   if (!iso) return ''
   const diff = Date.now() - new Date(iso).getTime()
   const mins = Math.floor(diff / 60000)
-  if (mins < 60)   return `${mins}m ago`
+  if (mins < 60) return `${mins}m ago`
   const hrs = Math.floor(mins / 60)
-  if (hrs < 24)    return `${hrs}h ago`
+  if (hrs < 24) return `${hrs}h ago`
   const days = Math.floor(hrs / 24)
-  if (days < 30)   return `${days}d ago`
+  if (days < 30) return `${days}d ago`
   const months = Math.floor(days / 30)
   return `${months}mo ago`
 }
@@ -162,12 +162,12 @@ function Divider() {
 
 function SummaryCard({ label, value, sub, color = 'blue' }) {
   const colors = {
-    blue:   'border-blue-200   dark:border-blue-800/40   bg-blue-50/50   dark:bg-blue-950/20   text-blue-700   dark:text-blue-400',
-    green:  'border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400',
-    amber:  'border-amber-200   dark:border-amber-800/40   bg-amber-50/50   dark:bg-amber-950/20   text-amber-700   dark:text-amber-400',
-    red:    'border-red-200     dark:border-red-800/40     bg-red-50/50     dark:bg-red-950/20     text-red-700     dark:text-red-400',
+    blue: 'border-blue-200   dark:border-blue-800/40   bg-blue-50/50   dark:bg-blue-950/20   text-blue-700   dark:text-blue-400',
+    green: 'border-emerald-200 dark:border-emerald-800/40 bg-emerald-50/50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400',
+    amber: 'border-amber-200   dark:border-amber-800/40   bg-amber-50/50   dark:bg-amber-950/20   text-amber-700   dark:text-amber-400',
+    red: 'border-red-200     dark:border-red-800/40     bg-red-50/50     dark:bg-red-950/20     text-red-700     dark:text-red-400',
     purple: 'border-purple-200  dark:border-purple-800/40  bg-purple-50/50  dark:bg-purple-950/20  text-purple-700  dark:text-purple-400',
-    slate:  'border-gray-200    dark:border-gray-700/60    bg-white         dark:bg-[#1e293b]       text-gray-700    dark:text-gray-300',
+    slate: 'border-gray-200    dark:border-gray-700/60    bg-white         dark:bg-[#1e293b]       text-gray-700    dark:text-gray-300',
   }
   return (
     <div className={`rounded-xl border p-4 ${colors[color]}`}>
@@ -185,12 +185,12 @@ function VitalsBlock({ vitals }) {
 
   const rows = [
     { label: 'Blood Pressure', value: vitals.bp_systolic && vitals.bp_diastolic ? `${vitals.bp_systolic}/${vitals.bp_diastolic} mmHg` : null },
-    { label: 'Temperature',    value: vitals.temperature    ? `${vitals.temperature} °C`   : null },
-    { label: 'Pulse',          value: vitals.pulse          ? `${vitals.pulse} bpm`        : null },
-    { label: 'SpO2',           value: vitals.spo2           ? `${vitals.spo2}%`            : null },
-    { label: 'Weight',         value: vitals.weight_kg      ? `${vitals.weight_kg} kg`     : null },
-    { label: 'Height',         value: vitals.height_cm      ? `${vitals.height_cm} cm`     : null },
-    { label: 'Resp. Rate',     value: vitals.respiratory_rate ? `${vitals.respiratory_rate} /min` : null },
+    { label: 'Temperature', value: vitals.temperature ? `${vitals.temperature} °C` : null },
+    { label: 'Pulse', value: vitals.pulse ? `${vitals.pulse} bpm` : null },
+    { label: 'SpO2', value: vitals.spo2 ? `${vitals.spo2}%` : null },
+    { label: 'Weight', value: vitals.weight_kg ? `${vitals.weight_kg} kg` : null },
+    { label: 'Height', value: vitals.height_cm ? `${vitals.height_cm} cm` : null },
+    { label: 'Resp. Rate', value: vitals.respiratory_rate ? `${vitals.respiratory_rate} /min` : null },
   ].filter(r => r.value)
 
   return (
@@ -350,9 +350,9 @@ function RxBlock({ prescriptions }) {
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
                   <Badge className={
-                    item.status === 'issued'   ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800/40' :
-                    item.status === 'declined' ? 'bg-red-50     dark:bg-red-900/20     text-red-700     dark:text-red-400     border-red-100     dark:border-red-800/40'     :
-                                                 'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400   border-amber-100   dark:border-amber-800/40'
+                    item.status === 'issued' ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 border-emerald-100 dark:border-emerald-800/40' :
+                      item.status === 'declined' ? 'bg-red-50     dark:bg-red-900/20     text-red-700     dark:text-red-400     border-red-100     dark:border-red-800/40' :
+                        'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400   border-amber-100   dark:border-amber-800/40'
                   }>{cap(item.status)}</Badge>
                   <span className="text-[11px] font-mono text-gray-500 dark:text-gray-400">
                     KES {fmt(item.unit_cost * item.quantity)}
@@ -365,8 +365,8 @@ function RxBlock({ prescriptions }) {
           {/* Status trail */}
           {(rx.return_reason || rx.cancel_reason || rx.verified_by || rx.notes) && (
             <div className="px-4 py-2 border-t border-gray-50 dark:border-gray-700/40 bg-gray-50/50 dark:bg-gray-800/20 space-y-0.5">
-              {rx.notes         && <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">{rx.notes}</p>}
-              {rx.verified_by   && <p className="text-[11px] text-gray-500 dark:text-gray-400">Verified by {rx.verified_by} · {fmtDateTime(rx.verified_at)}</p>}
+              {rx.notes && <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">{rx.notes}</p>}
+              {rx.verified_by && <p className="text-[11px] text-gray-500 dark:text-gray-400">Verified by {rx.verified_by} · {fmtDateTime(rx.verified_at)}</p>}
               {rx.return_reason && <p className="text-[11px] text-orange-600 dark:text-orange-400">Returned: {rx.return_reason}</p>}
               {rx.cancel_reason && <p className="text-[11px] text-red-600 dark:text-red-400">Cancelled: {rx.cancel_reason}</p>}
             </div>
@@ -383,10 +383,10 @@ function BillBlock({ bill }) {
   if (!bill) return <EmptyBlock text="No bill generated for this visit." />
 
   const feeLines = [
-    { label: 'Consultation', amount: bill.consultation_fee,  status: bill.consultation_fee_status, paidAt: bill.consultation_fee_paid_at },
-    { label: 'Lab Tests',    amount: bill.lab_fee,            status: bill.stage2_status,           paidAt: bill.stage2_paid_at },
-    { label: 'Medication',   amount: bill.medication_fee,     status: bill.stage2_status,           paidAt: null },
-    { label: 'Procedure',    amount: bill.procedure_fee,      status: bill.stage2_status,           paidAt: null },
+    { label: 'Consultation', amount: bill.consultation_fee, status: bill.consultation_fee_status, paidAt: bill.consultation_fee_paid_at },
+    { label: 'Lab Tests', amount: bill.lab_fee, status: bill.stage2_status, paidAt: bill.stage2_paid_at },
+    { label: 'Medication', amount: bill.medication_fee, status: bill.stage2_status, paidAt: null },
+    { label: 'Procedure', amount: bill.procedure_fee, status: bill.stage2_status, paidAt: null },
   ].filter(l => l.amount > 0)
 
   return (
@@ -429,7 +429,7 @@ function BillBlock({ bill }) {
       {/* Payment history */}
       {bill.payments?.length > 0 && (
         <div>
-          <SectionTitle count={bill.payments.length}>Payment History</SectionTitle>
+          <SectionTitle count={bill?.payments?.length}>Payment History</SectionTitle>
           <div className="space-y-2">
             {bill.payments.map(p => (
               <div key={p.id} className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-gray-100 dark:border-gray-700/60 bg-white dark:bg-[#1e293b]">
@@ -467,19 +467,19 @@ function BillBlock({ bill }) {
 // ─── Single visit card (collapsible) ─────────────────────────────────────────
 
 function VisitCard({ visit, defaultOpen = false }) {
-  const [open,    setOpen]    = useState(defaultOpen)
+  const [open, setOpen] = useState(defaultOpen)
   const [section, setSection] = useState('clinical')
 
   const SECTIONS = [
-    { key: 'clinical',       label: 'Clinical'       },
-    { key: 'vitals',         label: 'Vitals'         },
-    { key: 'lab',            label: 'Lab',     count: visit.lab_requests?.flatMap(r => r.items).length },
-    { key: 'prescriptions',  label: 'Rx',      count: visit.prescriptions?.length },
-    { key: 'billing',        label: 'Billing'        },
+    { key: 'clinical', label: 'Clinical' },
+    { key: 'vitals', label: 'Vitals' },
+    { key: 'lab', label: 'Lab', count: visit.lab_requests?.flatMap(r => r.items).length },
+    { key: 'prescriptions', label: 'Rx', count: visit.prescriptions?.length },
+    { key: 'billing', label: 'Billing' },
   ]
 
-  const hasLabs = visit.lab_requests?.some(r => r.items.length > 0)
-  const hasPx   = visit.prescriptions?.length > 0
+  const hasLabs = visit.lab_requests?.some(r => r.items?.length > 0)
+  const hasPx = visit.prescriptions?.length > 0
 
   return (
     <div className="rounded-2xl border border-gray-200 dark:border-gray-700/60 overflow-hidden bg-white dark:bg-[#1e293b]">
@@ -598,10 +598,10 @@ function VisitCard({ visit, defaultOpen = false }) {
                   <div className="space-y-2">
                     <SectionTitle>SOAP Notes</SectionTitle>
                     {[
-                      { label: 'S — Subjective',  value: visit.subjective },
-                      { label: 'O — Objective',   value: visit.objective  },
-                      { label: 'A — Assessment',  value: visit.assessment },
-                      { label: 'P — Plan',        value: visit.plan       },
+                      { label: 'S — Subjective', value: visit.subjective },
+                      { label: 'O — Objective', value: visit.objective },
+                      { label: 'A — Assessment', value: visit.assessment },
+                      { label: 'P — Plan', value: visit.plan },
                     ].filter(r => r.value).map(r => (
                       <div key={r.label} className="rounded-lg border border-gray-100 dark:border-gray-700/60 px-4 py-3">
                         <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-1">{r.label}</p>
@@ -632,10 +632,10 @@ function VisitCard({ visit, defaultOpen = false }) {
               </div>
             )}
 
-            {section === 'vitals'        && <VitalsBlock      vitals={visit.vitals}              />}
-            {section === 'lab'           && <LabBlock         labRequests={visit.lab_requests}   />}
-            {section === 'prescriptions' && <RxBlock          prescriptions={visit.prescriptions}/>}
-            {section === 'billing'       && <BillBlock        bill={visit.bill}                  />}
+            {/* {section === 'vitals' && <VitalsBlock vitals={visit.vitals} />} */}
+            {section === 'lab' && <LabBlock labRequests={visit.lab_requests} />}
+            {section === 'prescriptions' && <RxBlock prescriptions={visit.prescriptions} />}
+            {section === 'billing' && <BillBlock bill={visit.financial_summary} />}
           </div>
         </div>
       )}
@@ -646,8 +646,8 @@ function VisitCard({ visit, defaultOpen = false }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function PatientDetailPage() {
-  const { id }   = useParams()
-  const router   = useRouter()
+  const { id } = useParams()
+  const router = useRouter()
   const { data, isLoading, isError, error, refetch } = usePatientDetail(id)
 
   if (isLoading) {
@@ -692,8 +692,6 @@ export default function PatientDetailPage() {
 
   const { patient, financial_summary: fin, lab_summary: lab, visit_summary: vs, visits } = data
 
-  const age = new Date().getFullYear() - (patient?.date_of_birth ? new Date(patient.date_of_birth).getFullYear() : 0)
-
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">
 
@@ -704,7 +702,7 @@ export default function PatientDetailPage() {
           className="flex items-center gap-1.5 text-[12px] text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
           Patients
         </button>
@@ -735,8 +733,7 @@ export default function PatientDetailPage() {
                 <p className="text-[13px] text-gray-400 dark:text-gray-500 mt-0.5">
                   Patient #{patient.id}
                   {patient.national_id && <> · ID {patient.national_id}</>}
-                  {age != null && <> · {age} yrs</>}
-                  {patient.date_of_birth && <> · DOB {fmtDate(patient.date_of_birth)}</>}
+                  {patient.age != null && <> · {patient.age} yrs</>}
                 </p>
               </div>
               {/* Last visit */}
@@ -754,7 +751,7 @@ export default function PatientDetailPage() {
               {patient.phone && (
                 <span className="inline-flex items-center gap-1.5 text-[12px] text-gray-600 dark:text-gray-300 bg-gray-50 dark:bg-gray-800/60 border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 rounded-lg">
                   <svg className="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"/>
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                   </svg>
                   {patient.phone}
                 </span>
@@ -812,9 +809,9 @@ export default function PatientDetailPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               { label: 'Consultation', value: fin.by_category.consultation },
-              { label: 'Lab Tests',    value: fin.by_category.lab          },
-              { label: 'Medication',   value: fin.by_category.medication   },
-              { label: 'Procedure',    value: fin.by_category.procedure    },
+              { label: 'Lab Tests', value: fin.by_category.lab },
+              { label: 'Medication', value: fin.by_category.medication },
+              { label: 'Procedure', value: fin.by_category.procedure },
             ].filter(c => c.value > 0).map(c => (
               <div key={c.label} className="rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/40 px-3 py-2.5">
                 <p className="text-[10px] text-gray-400 dark:text-gray-500 uppercase tracking-wide">{c.label}</p>
@@ -851,7 +848,7 @@ export default function PatientDetailPage() {
           </span>
         </div>
 
-        {visits.length === 0 ? (
+        {visits?.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-gray-200 dark:border-gray-700/60 p-12 text-center">
             <p className="text-[14px] text-gray-400 dark:text-gray-500">No visits recorded for this patient.</p>
           </div>

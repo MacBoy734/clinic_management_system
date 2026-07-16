@@ -113,8 +113,6 @@ function PatientDetailPanel({ patientId, onClose }) {
   const patient = patientData
   if (!patient && !isLoading) return null
 
-  const age = getAge(patient?.date_of_birth)
-
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
@@ -594,7 +592,6 @@ export default function PatientArchivePage() {
                     </td>
                   </tr>
                 ) : patients.map((p) => {
-                  const age = getAge(p.date_of_birth)
                   return (
                     <tr key={p.id} className="hover:bg-blue-50/20 dark:hover:bg-blue-900/10 transition-colors group">
 

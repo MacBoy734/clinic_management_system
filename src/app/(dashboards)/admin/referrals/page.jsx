@@ -10,10 +10,9 @@ import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
-import {
-  StatCard, Card, CardHeader, Badge, EmptyState, ErrorState,
+import { Card, Badge, EmptyState, ErrorState,
   SkeletonCard, SkeletonList, Icon,
-  formatMoney, formatTime, formatDate, timeAgo, badgeClass, cap,
+  formatMoney, formatDate, timeAgo, badgeClass, cap,
 } from '@/utils/helpers'
 
 const FILTERS = [
@@ -87,92 +86,6 @@ export default function ReferralsTab() {
 
   return (
     <div className="space-y-4">
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <StatCard
-          icon="alert"
-          color="amber"
-          label="Pending Commissions"
-          value={stats?.pending_count ?? 0}
-          sublabel={formatMoney(stats?.pending_amount ?? 0)}
-        />
-        <StatCard
-          icon="checkCircle"
-          color="green"
-          label="Paid Commissions"
-          value={stats?.paid_count ?? 0}
-          sublabel={formatMoney(stats?.paid_amount ?? 0)}
-        />
-        <StatCard
-          icon="users"
-          color="blue"
-          label="Unique Referrers"
-          value={stats?.unique_referrers ?? 0}
-          sublabel="external providers"
-        />
-        <StatCard
-          icon="dollarSign"
-          color="purple"
-          label="Total Commission"
-          value={formatMoney(
-            (stats?.pending_amount ?? 0) + (stats?.paid_amount ?? 0)
-          )}
-          sublabel="all-time"
-        />
-      </div>
-
-      {/* Commission owed by referrer — summary cards */}
-      {byReferrer.length > 0 && (
-        <Card className="overflow-hidden">
-          <CardHeader
-            title="Commission Summary by Referrer"
-            subtitle="Aggregated pending + paid per external provider"
-          />
-          <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
-            {byReferrer.map((r) => (
-              <div
-                key={r.name}
-                className="px-4 py-3 flex items-center justify-between gap-3 flex-wrap hover:bg-gray-50/50 dark:hover:bg-gray-700/10"
-              >
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <div className="w-9 h-9 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] dark:text-blue-400 flex items-center justify-center shrink-0">
-                    <Icon name="stethoscope" size={16} />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 truncate">
-                      {r.name}
-                    </p>
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                      {r.facility} · {r.contact}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4 shrink-0">
-                  <div className="text-right">
-                    <p className="text-[10px] uppercase tracking-wider text-amber-600 dark:text-amber-400 font-semibold">
-                      Pending
-                    </p>
-                    <p className="text-[13px] font-semibold text-amber-700 dark:text-amber-400 tabular-nums">
-                      {formatMoney(r.pending_amount)}
-                    </p>
-                    <p className="text-[10px] text-gray-400">{r.pending_count} referral{r.pending_count !== 1 ? 's' : ''}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-[10px] uppercase tracking-wider text-emerald-600 dark:text-emerald-400 font-semibold">
-                      Paid
-                    </p>
-                    <p className="text-[13px] font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
-                      {formatMoney(r.paid_amount)}
-                    </p>
-                    <p className="text-[10px] text-gray-400">{r.paid_count} referral{r.paid_count !== 1 ? 's' : ''}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
       {/* Filter pills */}
       <div className="flex items-center gap-2 flex-wrap">
         {FILTERS.map((f) => {

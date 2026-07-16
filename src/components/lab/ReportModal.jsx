@@ -14,12 +14,11 @@
 //   manual spacers.
 //
 //   Break rules (see @media print):
-//     - a test block stays whole when it fits; the engine pushes it to the
-//       next page if it doesn't, and only splits it if it's taller than a page
-//     - inside an over-long panel, splits fall BETWEEN rows, never through one
+//     - a test block starts on the current page and continues onto the next
+//       when too tall; splits fall BETWEEN rows, never through one
 //     - a TEST/section bar never lands alone at the bottom (no orphan header)
 //   To force one-test-per-page (original pad style) instead of continuous
-//   flow: change `.report-test-block` break-inside to `break-before: page`.
+//   flow: change `.report-test-block` to `break-before: page`.
 //
 // BODY IS TEMPLATE-DRIVEN: iterates item.catalog.result_template.sections
 // (the SAME shape ResultsModal writes), rendering values from
@@ -127,11 +126,11 @@ export function ReportModal({ request, onClose }) {
           tfoot.report-running-footer { display: table-footer-group !important; }
 
           /* Pagination discipline */
-          .report-test-block { break-inside: avoid; }      /* keep a test whole when it fits */
-          .report-section    { break-inside: avoid; }
-          .report-field-row  { break-inside: avoid; }        /* never split a single row */
-          .report-test-bar   { break-after: avoid; }         /* no orphaned test header  */
-          .report-section-bar{ break-after: avoid; }         /* no orphaned section header */
+          .report-test-block { break-inside: auto; }        /* start on the current page; split across pages when too tall */
+          .report-section    { break-inside: auto; }        /* a long panel section may also split */
+          .report-field-row  { break-inside: avoid; }       /* never split a single row */
+          .report-test-bar   { break-after: avoid; }        /* no orphaned test header  */
+          .report-section-bar{ break-after: avoid; }        /* no orphaned section header */
           .report-signatures { break-inside: avoid; }
 
           @page { size: A4; margin: 1cm; }
