@@ -293,7 +293,7 @@ export function MedicalReportModal({ visitId, onClose }) {
                         </p>
                       </div>
                       <div className="mt-2 mx-6" style={{ borderTop: `3px solid ${BLUE}` }} />
-                      <div className="mt-[3px] mx-6 border-t border-gray-800" />
+                      <div className="mt-0.75 mx-6 border-t border-gray-800" />
                     </td>
                   </tr>
                 </thead>

@@ -57,19 +57,16 @@ export default function BillingTab() {
 
   const bills = data ?? []
 
-  const handlePay = async (bill, method, reference) => {
+  // payload = { payments:[{method,amount,reference}], discount_amount, discount_reason }
+  const handlePay = async (bill, payload) => {
     try {
       await payMutation.mutateAsync({
         visit_id: bill.visit_id,
-        amount: bill.total_amount - bill.paid_amount,
-        method,
-        reference,
         stage: 2,
+        ...payload,
       })
       toast.success(`Payment collected from ${bill.patient_name}`)
       setPaying(null)
-      // Auto-open receipt immediately after payment so receptionist can print
-      setReceiptBill({ ...bill, status: 'paid', paid_amount: bill.total_amount, method })
     } catch (err) {
       toast.error(err.message || 'Payment failed')
     }
@@ -85,8 +82,8 @@ export default function BillingTab() {
   const completed = bills.filter((b) => b.visit_status === 'done' || b.status === 'paid')
 
   const totalCollected = completed.reduce((s, b) => s + b.paid_amount, 0)
-  const totalReady = readyForBilling.reduce((s, b) => s + (b.total_amount - b.paid_amount), 0)
-  const totalPending = inProcess.reduce((s, b) => s + (b.total_amount - b.paid_amount), 0)
+  const totalReady = readyForBilling.reduce((s, b) => s + ((b.payable_amount ?? b.total_amount) - b.paid_amount), 0)
+  const totalPending = inProcess.reduce((s, b) => s + ((b.payable_amount ?? b.total_amount) - b.paid_amount), 0)
 
   return (
     <div className="space-y-4">
@@ -140,16 +137,22 @@ export default function BillingTab() {
                         <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items.map((i) => i.name).join(', ')}</span>
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
-                      <td className="px-4 py-3 text-right text-[13px] font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatMoney(b.total_amount - b.paid_amount)}</td>
+                      <td className="px-4 py-3 text-right text-[13px] font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatMoney((b.payable_amount ?? b.total_amount) - b.paid_amount)}</td>
                       <td className="px-4 py-3 text-center"><Badge className={badgeClass(b.status)}>{cap(b.status)}</Badge></td>
                       <td className="px-4 py-3 text-right">
-                        {/* No printer button here — receipt only available after payment */}
-                        <button
-                          onClick={() => setPaying(b)}
-                          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 ml-auto"
-                        >
-                          <Icon name="dollarSign" size={13} /> Collect
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            onClick={() => setReceiptBill(b)}
+                            title="Print receipt"
+                            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500 dark:text-gray-400 hover:text-[#1a6cbf] hover:bg-blue-50 dark:hover:bg-blue-900/30 border border-gray-200 dark:border-gray-700 transition-colors"
+                          >
+                            <Icon name="printer" size={13} />
+                          </button>
+                          <button onClick={() => setPaying(b)}
+                            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5">
+                            <Icon name="dollarSign" size={13} /> Collect
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -192,7 +195,7 @@ export default function BillingTab() {
                         <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items.map((i) => i.name).join(', ')}</span>
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
-                      <td className="px-4 py-3 text-right text-[13px] font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{formatMoney(b.total_amount - b.paid_amount)}</td>
+                      <td className="px-4 py-3 text-right text-[13px] font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{formatMoney((b.payable_amount ?? b.total_amount) - b.paid_amount)}</td>
                       <td className="px-4 py-3 text-center">
                         <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
                           <Icon name="clock" size={11} /> {WHERE_LABEL[b.visit_status] || cap(b.visit_status)}
@@ -246,14 +249,15 @@ export default function BillingTab() {
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatMoney(b.paid_amount)}</td>
                       <td className="px-4 py-3 text-center">
-                        <span className="text-[11px] text-gray-500 dark:text-gray-400 capitalize">{b.method || '—'}</span>
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400 capitalize">
+                          {b.payments && b.payments.length > 1 ? `Split (${b.payments.length})` : (b.method || '—')}
+                        </span>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
                             <Icon name="check" size={11} /> Paid
                           </Badge>
-                          {/* Printer button only available on fully paid bills */}
                           <button
                             onClick={() => setReceiptBill(b)}
                             title="Print receipt"
@@ -293,16 +297,17 @@ export default function BillingTab() {
       {paying && (
         <PaymentModal
           visit={paying}
+          stage={2}
           title="Collect Stage 2 Payment"
-          description="Lab + medication + procedure fees — patient has completed all services"
+          description="Lab + medication + procedure fees — split methods & discount supported"
           amount={paying.total_amount - paying.paid_amount}
           loading={payMutation.isPending}
           onClose={() => setPaying(null)}
-          onConfirm={handlePay}
+          onConfirm={(payload) => handlePay(paying, payload)}
         />
       )}
 
-      {/* Receipt modal — only opens after payment or from completed rows */}
+      {/* Receipt modal — manual print only */}
       {receiptBill && (
         <ReceiptModal bill={receiptBill} onClose={() => setReceiptBill(null)} />
       )}

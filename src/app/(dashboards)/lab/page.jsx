@@ -5,6 +5,9 @@
 //   GET   /api/lab/stats                     → KPI counts
 //   GET   /api/lab/queue                     → pending + in_progress, sorted by urgency
 //   PATCH /api/lab/requests/[id]/status      → start (in_progress) or save results (ready)
+//                                              response: { success, warnings: string[] }
+//                                              warnings = stock-deduction problems
+//                                              (item vanished, shelf ran short, …)
 
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
@@ -33,6 +36,8 @@ function shapeReq(raw) {
       category: item.category ?? item.catalog?.category ?? null,
       // hoist so modal reads item.result_template directly
       result_template: item.catalog?.result_template ?? null,
+      // stock_used (persisted LabStockUsage rows) rides through the spread —
+      // the ResultsModal seeds its Stock Used rows from it
     })),
   }
 }
@@ -77,6 +82,8 @@ export default function QueueTab() {
   })
 
   // Status mutation (start / save results)
+  // The ['lab'] prefix invalidation also covers ['lab', 'stock'], so the
+  // modal's inventory dropdown reflects deductions after every save.
   const statusMut = useMutation({
     mutationFn: ({ id, body }) => api.patch(`/api/lab/requests/${id}/status`, body),
     onSuccess: () => {
@@ -101,7 +108,7 @@ export default function QueueTab() {
 
   const handleSaveResults = async (req, itemResults, saveStatus) => {
     try {
-      await statusMut.mutateAsync({
+      const result = await statusMut.mutateAsync({
         id: req.id,
         body: {
           status: saveStatus,
@@ -112,6 +119,11 @@ export default function QueueTab() {
         toast.success(`Results saved — ${req.patient_name}'s request is ready`)
       } else {
         toast.success('Progress saved')
+      }
+      // Surface stock-deduction warnings from the server (shelf ran short,
+      // stock item deleted, …). Results still saved — these need a human.
+      if (result?.warnings?.length) {
+        result.warnings.forEach((w) => toast.error(w, { duration: 6000 }))
       }
       setEntering(null)
     } catch (err) {
@@ -357,6 +369,12 @@ function QueueCard({ req, onStart, onEnterResults, starting }) {
                       </span>
                     )}
                   </span>
+                  {/* consumables recorded against this test */}
+                  {item.stock_used?.length > 0 && (
+                    <span className="text-[10px] text-gray-400 hidden sm:inline" title={item.stock_used.map((u) => `${u.item_name} ×${u.quantity}`).join(', ')}>
+                      {item.stock_used.length} consumable{item.stock_used.length > 1 ? 's' : ''}
+                    </span>
+                  )}
                   {/* category from catalog */}
                   {item.category && (
                     <span className="text-[10px] uppercase tracking-wider text-gray-400 hidden sm:inline">

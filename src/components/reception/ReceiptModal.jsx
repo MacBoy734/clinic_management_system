@@ -27,9 +27,11 @@ export function ReceiptModal({ bill, onClose }) {
   }
 
   const total = bill.total_amount || 0
+  const discount = bill.discount_amount || 0
+  const payable = Math.max(0, total - discount)
   const paid = bill.paid_amount || 0
-  const balance = Math.max(0, total - paid)
-  const isPaid = paid >= total && total > 0
+  const balance = Math.max(0, payable - paid)
+  const isPaid = paid >= payable && payable >= 0 && total > 0
   const payments = bill.payments || []
   const items = bill.items || []
   const receiptDate = new Date()
@@ -116,6 +118,20 @@ export function ReceiptModal({ bill, onClose }) {
                       <td className="py-2 pr-3 font-bold text-gray-900 uppercase tracking-wider text-[11px]">Total Bill</td>
                       <td className="py-2 pl-3 font-bold text-gray-900 text-right tabular-nums text-[14px]">{formatMoney(total)}</td>
                     </tr>
+                    {discount > 0 && (
+                      <>
+                        <tr>
+                          <td className="py-1.5 pr-3 text-gray-700 text-[11px]">
+                            Discount{bill.discount_reason ? ` — ${bill.discount_reason}` : ''}
+                          </td>
+                          <td className="py-1.5 pl-3 text-gray-700 text-right tabular-nums">− {formatMoney(discount)}</td>
+                        </tr>
+                        <tr className="border-t border-gray-300">
+                          <td className="py-2 pr-3 font-bold text-gray-900 uppercase tracking-wider text-[11px]">Amount Payable</td>
+                          <td className="py-2 pl-3 font-bold text-gray-900 text-right tabular-nums text-[14px]">{formatMoney(payable)}</td>
+                        </tr>
+                      </>
+                    )}
                   </tbody>
                 </table>
 

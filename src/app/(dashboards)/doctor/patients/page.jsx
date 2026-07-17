@@ -209,7 +209,7 @@ export default function PatientDatabaseTab() {
 
         {/* Diagnosis dropdown — built from the clinic's own recorded codes */}
         <FilterRow label="Diagnosis">
-          <div className="relative flex-1 min-w-[200px]">
+          <div className="relative flex-1 min-w-50">
             <select
               value={diagnosisCode}
               onChange={(e) => setDiagnosisCode(e.target.value)}
