@@ -57,7 +57,7 @@ export default function QueueTab() {
     return () => {
       socket.off('visit:new')
     }
-  }, [])
+  }, [queryClient])
 
   // KPI stats
   const statsQ = useQuery({

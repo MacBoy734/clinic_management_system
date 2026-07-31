@@ -54,7 +54,7 @@ export default function QueueTab() {
   })
 
   const dispenseMutation = useMutation({
-    mutationFn: (id) => api.patch(`/api/pharmacy/prescriptions/${id}/dispense`, { pharmacist_id: 5 }),
+    mutationFn: (id) => api.patch(`/api/pharmacy/prescriptions/${id}/dispense`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pharmacy'] })
     },
@@ -79,9 +79,13 @@ export default function QueueTab() {
     socket.on('prescription:new', () => {
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'queue'] })
     })
+    socket.on('prescription:returned', () => {
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'queue'] })
+    })
 
     return () => {
       socket.off('prescription:new')
+      socket.off('prescription:returned')
     }
   }, [queryClient])
 

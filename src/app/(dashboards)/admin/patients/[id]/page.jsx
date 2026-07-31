@@ -215,7 +215,6 @@ function VitalsBlock({ vitals }) {
 
 function LabBlock({ labRequests }) {
   if (!labRequests?.length) return <EmptyBlock text="No lab tests ordered for this visit." />
-
   return (
     <div className="space-y-3">
       {labRequests.map(r => (
@@ -242,58 +241,8 @@ function LabBlock({ labRequests }) {
             <span className="text-[11px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
               {fmtDateTime(r.requested_at)}
             </span>
+
           </div>
-
-          {/* Test items */}
-          <div className="divide-y divide-gray-50 dark:divide-gray-700/40">
-            {r.items.map(item => (
-              <div key={item.id} className="px-4 py-2.5 flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                    <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.test_name}</p>
-                    {item.category && (
-                      <span className="text-[10px] text-gray-400 dark:text-gray-500 capitalize">{item.category}</span>
-                    )}
-                    {item.flagged && (
-                      <span className="text-[10px] font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 px-1.5 py-0.5 rounded border border-red-100 dark:border-red-800/40">
-                        ⚠ Flagged
-                      </span>
-                    )}
-                  </div>
-
-                  {/* Result */}
-                  {item.result && (
-                    <p className="text-[12px] text-gray-700 dark:text-gray-300 mt-1">
-                      <span className="font-semibold">Result: </span>{item.result}
-                    </p>
-                  )}
-                  {item.result_notes && (
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400 italic mt-0.5">{item.result_notes}</p>
-                  )}
-                  {item.reference_range && (
-                    <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
-                      Ref: {item.reference_range}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-col items-end gap-1 shrink-0">
-                  <Badge className={LAB_STATUS_COLORS[item.status]}>{cap(item.status)}</Badge>
-                  {item.unit_cost > 0 && (
-                    <span className="text-[11px] font-mono text-gray-500 dark:text-gray-400">
-                      KES {fmt(item.unit_cost)}
-                    </span>
-                  )}
-                  {item.completed_at && (
-                    <span className="text-[10px] text-gray-400 dark:text-gray-500">
-                      {fmtTime(item.completed_at)}
-                    </span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-
           {r.notes && (
             <div className="px-4 py-2 border-t border-gray-50 dark:border-gray-700/40 bg-gray-50/50 dark:bg-gray-800/20">
               <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">{r.notes}</p>

@@ -1,36 +1,54 @@
 'use client'
 
-// OTCSalesTab — pharmacy's over-the-counter (walk-in) sales register.
-// SEPARATE from prescription dispensing — these sales don't affect visit status.
-//
-// APIs:
-//   GET  /api/pharmacy/drugs      → { items: [...] }  (drug stock with all 3 price tiers)
-//   GET  /api/pharmacy/otc-sales  → { sales: [...], stats: { total_sales, total_revenue, today_count, today_revenue } }
-//   POST /api/pharmacy/otc-sales  → create sale
-//        Body: { customer_name, payment_method, sold_by, items: [{drug_id, name, quantity, unit_price, price_tier}] }
 
 import { useState, useRef, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import api  from '@/lib/api'
+import api from '@/lib/api'
 import {
   SkeletonList, SkeletonCard, ErrorState, EmptyState, Card, Badge, Icon,
-  cap, formatMoney, formatTime, formatDateTime, timeAgo, StatCard, PAYMENT_METHODS, Spinner
+  cap, formatMoney, formatTime, formatDateTime, timeAgo, StatCard,
+  PAYMENT_METHODS, Spinner,
 } from '@/utils/helpers'
 import { useAuthStore } from '@/store/authStore'
 
-// Price tier metadata — matches the helpers.STATUS_BADGES price-tier colours
 const PRICE_TIERS = [
-  { key: 'normal', label: 'Normal', priceField: 'pharmacy_normal_price' },
+  { key: 'normal', label: 'Normal', priceField: 'normal_price' },
   { key: 'promotional', label: 'Promo', priceField: 'promotional_price' },
   { key: 'wholesale', label: 'Wholesale', priceField: 'wholesale_price' },
 ]
+
+// Chip order. Adding a category to the ProductCategory enum and to this map
+// is all the UI needs — the chips themselves are built from the data.
+const CATEGORY_META = {
+  medication: {
+    label: 'Medications',
+    icon: 'pill',
+    badge: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  },
+  consumable: {
+    label: 'Consumables',
+    icon: 'box',
+    badge: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
+  },
+  general: {
+    label: 'General',
+    icon: 'shoppingCart',
+    badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  },
+}
+
+const NEUTRAL_BADGE = 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400'
+
+function categoryLabel(c) { return CATEGORY_META[c]?.label || cap(c) }
+function categoryIcon(c) { return CATEGORY_META[c]?.icon || 'box' }
+function categoryBadgeClass(c) { return CATEGORY_META[c]?.badge || NEUTRAL_BADGE }
 
 function tierBadgeClass(tier) {
   if (tier === 'normal') return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
   if (tier === 'promotional') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
   if (tier === 'wholesale') return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400'
-  return 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400'
+  return NEUTRAL_BADGE
 }
 
 function tierLabel(tier) {
@@ -44,7 +62,22 @@ function paymentBadgeClass(method) {
   if (method === 'cash') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
   if (method === 'mpesa') return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
   if (method === 'insurance') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
-  return 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400'
+  return NEUTRAL_BADGE
+}
+
+function errMsg(err, fallback) {
+  return err?.response?.data?.error || err?.data?.error || err?.message || fallback
+}
+
+// Non-medications have no generic name or strength. The old dropdown called
+// `d.generic_name.toLowerCase()` unguarded — one box of gloves in the
+// catalogue and the whole search threw.
+function productSubtitle(p) {
+  if (!p) return ''
+  if (p.category === 'medication') {
+    return [p.generic_name, p.strength, cap(p.form)].filter(Boolean).join(' · ')
+  }
+  return [cap(p.sub_category), p.unit].filter(Boolean).join(' · ')
 }
 
 export default function OTCSalesTab() {
@@ -52,7 +85,7 @@ export default function OTCSalesTab() {
   const user = useAuthStore((s) => s.user)
   const soldBy = user?.name || 'Pharmacist'
   const [showNewSale, setShowNewSale] = useState(false)
-  const [receiptSale, setReceiptSale] = useState(null) // sale object for the receipt modal
+  const [receiptSale, setReceiptSale] = useState(null)
 
   const salesQuery = useQuery({
     queryKey: ['pharmacy', 'otc-sales'],
@@ -65,42 +98,54 @@ export default function OTCSalesTab() {
     mutationFn: (payload) => api.post('/api/pharmacy/otc-sales', payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'otc-sales'] })
-      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'drugs'] })
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'products'] })
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
     },
   })
 
-  const isLoading = salesQuery.isLoading
-  const error = salesQuery.error
-  const refetch = () => salesQuery.refetch()
-
-  if (isLoading) {
+  if (salesQuery.isLoading) {
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <SkeletonCard key={i} />
-          ))}
+          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
         </div>
         <SkeletonList items={4} />
       </div>
     )
   }
 
-  if (error) return <ErrorState message={error.message} onRetry={refetch} />
+  if (salesQuery.error) {
+    return (
+      <ErrorState
+        message={errMsg(salesQuery.error, 'Could not load sales')}
+        onRetry={salesQuery.refetch}
+      />
+    )
+  }
 
   const sales = salesQuery.data?.sales || []
-  const stats = salesQuery.data?.stats || { total_sales: 0, total_revenue: 0, today_count: 0, today_revenue: 0 }
+  const stats = salesQuery.data?.stats
+    || { total_sales: 0, total_revenue: 0, today_count: 0, today_revenue: 0 }
 
   const handleCompleteSale = async (payload) => {
     try {
-      const res = await createSaleMutation.mutateAsync({ ...payload, sold_by: soldBy })
+      const res = await createSaleMutation.mutateAsync(payload)
       toast.success(`Sale ${res.sale.receipt_number} completed`)
       setShowNewSale(false)
-      // Auto-open the receipt for the sale that was just created
       setReceiptSale(res.sale)
     } catch (err) {
-      toast.error(err.message || 'Could not complete sale')
+      // A 409 carries the exact shortfall — say which item and by how much,
+      // not "Could not complete sale".
+      const shortfalls = err?.response?.data?.shortfalls || err?.data?.shortfalls
+      if (Array.isArray(shortfalls) && shortfalls.length) {
+        toast.error(
+          shortfalls
+            .map((s) => `${s.name}: asked ${s.requested}, only ${s.available} left`)
+            .join(' · ')
+        )
+        return
+      }
+      toast.error(errMsg(err, 'Could not complete sale'))
     }
   }
 
@@ -108,34 +153,14 @@ export default function OTCSalesTab() {
     <div className="space-y-4">
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard
-          icon="dollarSign"
-          color="green"
-          label="Today's Revenue"
-          value={formatMoney(stats.today_revenue)}
-          sublabel="OTC sales today"
-        />
-        <StatCard
-          icon="receipt"
-          color="blue"
-          label="Today's Sales"
-          value={stats.today_count}
-          sublabel="transactions"
-        />
-        <StatCard
-          icon="trendUp"
-          color="purple"
-          label="Total Revenue"
-          value={formatMoney(stats.total_revenue)}
-          sublabel="all-time"
-        />
-        <StatCard
-          icon="shoppingCart"
-          color="amber"
-          label="Total Sales"
-          value={stats.total_sales}
-          sublabel="transactions"
-        />
+        <StatCard icon="dollarSign" color="green" label="Today's Revenue"
+          value={formatMoney(stats.today_revenue)} sublabel="counter sales today" />
+        <StatCard icon="receipt" color="blue" label="Today's Sales"
+          value={stats.today_count} sublabel="transactions" />
+        <StatCard icon="trendUp" color="purple" label="Total Revenue"
+          value={formatMoney(stats.total_revenue)} sublabel="all-time" />
+        <StatCard icon="shoppingCart" color="amber" label="Total Sales"
+          value={stats.total_sales} sublabel="transactions" />
       </div>
 
       {/* Action bar */}
@@ -143,7 +168,7 @@ export default function OTCSalesTab() {
         <div>
           <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Recent Sales</h3>
           <p className="text-[11px] text-gray-500 dark:text-gray-400">
-            Walk-in customer medication sales
+            Walk-in sales — medications, consumables and general goods
           </p>
         </div>
         <button
@@ -158,8 +183,8 @@ export default function OTCSalesTab() {
       {!sales.length ? (
         <EmptyState
           icon="receipt"
-          title="No OTC sales yet"
-          description="Click 'New Sale' to record your first walk-in medication sale. Receipts are generated automatically."
+          title="No counter sales yet"
+          description="Start a sale to serve a walk-in customer. Receipts are generated automatically."
         />
       ) : (
         <div className="space-y-3">
@@ -169,7 +194,6 @@ export default function OTCSalesTab() {
         </div>
       )}
 
-      {/* New sale modal */}
       {showNewSale && (
         <NewSaleModal
           loading={createSaleMutation.isPending}
@@ -179,7 +203,6 @@ export default function OTCSalesTab() {
         />
       )}
 
-      {/* Receipt print modal */}
       {receiptSale && (
         <ReceiptModal sale={receiptSale} soldBy={soldBy} onClose={() => setReceiptSale(null)} />
       )}
@@ -187,10 +210,12 @@ export default function OTCSalesTab() {
   )
 }
 
-// ─── Sale card in the recent sales list ──────────────────────────────
+// ─── Sale card ────────────────────────────────────────────────────────────────
+
 function SaleCard({ sale, onPrint }) {
   const items = sale.items || []
   const itemCount = items.reduce((s, i) => s + (i.quantity || 0), 0)
+
   return (
     <Card className="p-4 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -221,6 +246,11 @@ function SaleCard({ sale, onPrint }) {
             <p className="text-[15px] font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">
               {formatMoney(sale.total)}
             </p>
+            {sale.tax_total > 0 && (
+              <p className="text-[10px] text-gray-400 tabular-nums">
+                incl. {formatMoney(sale.tax_total)} tax
+              </p>
+            )}
           </div>
           <button
             onClick={onPrint}
@@ -231,7 +261,6 @@ function SaleCard({ sale, onPrint }) {
         </div>
       </div>
 
-      {/* Item chips */}
       {items.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-1.5">
           {items.map((item, i) => (
@@ -239,6 +268,7 @@ function SaleCard({ sale, onPrint }) {
               key={i}
               className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700/40 text-[11px] text-gray-600 dark:text-gray-300"
             >
+              <Icon name={categoryIcon(item.category)} size={11} className="text-gray-400" />
               {item.name} ×{item.quantity}
               <span className={`inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold ${tierBadgeClass(item.price_tier)}`}>
                 {tierLabel(item.price_tier)}
@@ -251,28 +281,30 @@ function SaleCard({ sale, onPrint }) {
   )
 }
 
-// ─── New sale modal — drug search + cart + complete ───────────────────
+// ─── New sale modal ───────────────────────────────────────────────────────────
+
 function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const [customerName, setCustomerName] = useState('Walk-in Customer')
   const [paymentMethod, setPaymentMethod] = useState('cash')
 
   const [searchQuery, setSearchQuery] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
   const [showDropdown, setShowDropdown] = useState(false)
-  const [selectedDrug, setSelectedDrug] = useState(null)
-  const [selectedTier, setSelectedTier] = useState(null) // 'normal' | 'promotional' | 'wholesale'
+  const [selectedProduct, setSelectedProduct] = useState(null)
+  const [selectedTier, setSelectedTier] = useState(null)
   const [quantity, setQuantity] = useState(1)
   const [cart, setCart] = useState([])
 
-  const drugsQuery = useQuery({
-    queryKey: ['pharmacy', 'drugs'],
-    queryFn: () => api.get('/api/pharmacy/drugs'),
+  // The whole catalogue — the counter sells every category.
+  const productsQuery = useQuery({
+    queryKey: ['pharmacy', 'products', 'all'],
+    queryFn: () => api.get('/api/pharmacy/products'),
     staleTime: 30000,
   })
 
-  const drugs = drugsQuery.data?.items || []
+  const products = productsQuery.data?.items || []
   const searchRef = useRef(null)
 
-  // Click-outside to close the search dropdown
   useEffect(() => {
     function onMouseDown(e) {
       if (searchRef.current && !searchRef.current.contains(e.target)) {
@@ -283,59 +315,86 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
 
-  // Filtered drug list for the search dropdown
-  const filteredDrugs = useMemo(() => {
+  // Only show chips for categories actually stocked.
+  const categoriesPresent = useMemo(
+    () => [...new Set(products.map((p) => p.category))]
+      .sort((a, b) => Object.keys(CATEGORY_META).indexOf(a) - Object.keys(CATEGORY_META).indexOf(b)),
+    [products]
+  )
+
+  const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
-    if (!q) return drugs.slice(0, 8)
-    return drugs
-      .filter(
-        (d) =>
-          d.name.toLowerCase().includes(q) ||
-          d.generic_name.toLowerCase().includes(q)
-      )
-      .slice(0, 8)
-  }, [drugs, searchQuery])
+    return products
+      .filter((p) => categoryFilter === 'all' || p.category === categoryFilter)
+      .filter((p) => {
+        if (!q) return true
+        // Every one of these is optional on a non-medication. Guard them all.
+        return (
+          (p.name || '').toLowerCase().includes(q) ||
+          (p.generic_name || '').toLowerCase().includes(q) ||
+          (p.sub_category || '').toLowerCase().includes(q) ||
+          (p.sku || '').toLowerCase().includes(q)
+        )
+      })
+      .slice(0, 10)
+  }, [products, searchQuery, categoryFilter])
 
   const selectedPrice =
-    selectedDrug && selectedTier
-      ? selectedDrug[PRICE_TIERS.find((t) => t.key === selectedTier).priceField]
+    selectedProduct && selectedTier
+      ? selectedProduct[PRICE_TIERS.find((t) => t.key === selectedTier).priceField] || 0
       : 0
 
   const lineSubtotal = (selectedPrice || 0) * (quantity || 0)
   const cartTotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
 
-  function selectDrug(drug) {
-    setSelectedDrug(drug)
-    setSelectedTier('normal') // default to Normal tier
+  // Quantity already in the cart for this product, so a second line for the
+  // same item cannot quietly exceed the shelf.
+  const inCartFor = (productId) =>
+    cart.filter((c) => c.product_id === productId).reduce((s, c) => s + c.quantity, 0)
+
+  function selectProduct(product) {
+    setSelectedProduct(product)
+    setSelectedTier('normal')
     setQuantity(1)
     setShowDropdown(false)
-    setSearchQuery(drug.name)
+    setSearchQuery(product.name)
+  }
+
+  function clearSelection() {
+    setSelectedProduct(null)
+    setSelectedTier(null)
+    setQuantity(1)
+    setSearchQuery('')
   }
 
   function handleAddToCart() {
-    if (!selectedDrug || !selectedTier || !quantity || quantity < 1) {
-      toast.error('Pick a drug, price tier, and quantity first')
+    if (!selectedProduct || !selectedTier || !quantity || quantity < 1) {
+      toast.error('Pick an item, a price tier and a quantity first')
       return
     }
-    if (quantity > selectedDrug.current_stock) {
-      toast.error(`Only ${selectedDrug.current_stock} ${selectedDrug.unit || 'units'} of ${selectedDrug.name} in stock`)
+    const alreadyInCart = inCartFor(selectedProduct.id)
+    if (alreadyInCart + Number(quantity) > selectedProduct.current_stock) {
+      const left = selectedProduct.current_stock - alreadyInCart
+      toast.error(
+        left > 0
+          ? `Only ${left} ${selectedProduct.unit || 'units'} of ${selectedProduct.name} left`
+          : `${selectedProduct.name} is already fully in the cart`
+      )
       return
     }
     setCart((prev) => [
       ...prev,
       {
-        drug_id: selectedDrug.id,
-        name: selectedDrug.name,
+        product_id: selectedProduct.id,
+        name: selectedProduct.name,
+        category: selectedProduct.category,
+        unit: selectedProduct.unit,
         quantity: Number(quantity),
         unit_price: selectedPrice,
         price_tier: selectedTier,
       },
     ])
-    // Reset selection state (keep customer/payment)
-    setSelectedDrug(null)
-    setSelectedTier(null)
-    setQuantity(1)
-    setSearchQuery('')
+    clearSelection()
   }
 
   function removeCartItem(index) {
@@ -352,7 +411,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       customer_name: customerName.trim() || 'Walk-in Customer',
       payment_method: paymentMethod,
       items: cart.map((i) => ({
-        drug_id: i.drug_id,
+        product_id: i.product_id,
         name: i.name,
         quantity: i.quantity,
         unit_price: i.unit_price,
@@ -375,8 +434,10 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               <Icon name="shoppingCart" size={16} className="text-white" />
             </div>
             <div>
-              <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">New OTC Sale</h3>
-              <p className="text-[11px] text-gray-500 dark:text-gray-400">Walk-in customer · served by {soldBy}</p>
+              <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">New Counter Sale</h3>
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                Walk-in customer · served by {soldBy}
+              </p>
             </div>
           </div>
           <button
@@ -427,11 +488,36 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
             </div>
           </div>
 
-          {/* Drug search + add to cart */}
+          {/* Product search */}
           <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
-              Add Medication
+              Add Item
             </p>
+
+            {/* Category chips */}
+            {categoriesPresent.length > 1 && (
+              <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                {['all', ...categoriesPresent].map((c) => {
+                  const active = categoryFilter === c
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => { setCategoryFilter(c); setShowDropdown(true) }}
+                      className={[
+                        'px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors flex items-center gap-1',
+                        active
+                          ? 'bg-[#1a6cbf] text-white'
+                          : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400 hover:border-blue-300',
+                      ].join(' ')}
+                    >
+                      {c !== 'all' && <Icon name={categoryIcon(c)} size={11} />}
+                      {c === 'all' ? 'All' : categoryLabel(c)}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
 
             <div ref={searchRef} className="relative">
               <Icon
@@ -445,50 +531,56 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 onChange={(e) => {
                   setSearchQuery(e.target.value)
                   setShowDropdown(true)
-                  setSelectedDrug(null)
+                  setSelectedProduct(null)
                   setSelectedTier(null)
                 }}
                 onFocus={() => setShowDropdown(true)}
-                placeholder="Search drug by name or generic name…"
+                placeholder="Search by name, sub-category or SKU…"
                 className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
               />
 
-              {/* Dropdown */}
-              {showDropdown && filteredDrugs.length > 0 && (
+              {showDropdown && filteredProducts.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl max-h-60 overflow-y-auto">
-                  {filteredDrugs.map((drug) => {
-                    const out = drug.current_stock === 0
-                    const low = drug.current_stock > 0 && drug.current_stock <= drug.reorder_level
+                  {filteredProducts.map((product) => {
+                    const remaining = product.current_stock - inCartFor(product.id)
+                    const out = remaining <= 0
+                    const low = remaining > 0 && remaining <= product.reorder_level
                     return (
                       <button
-                        key={drug.id}
+                        key={product.id}
                         type="button"
-                        onClick={() => selectDrug(drug)}
-                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700/40 last:border-b-0"
+                        onClick={() => selectProduct(product)}
+                        disabled={out}
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700/40 last:border-b-0 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
-                            {drug.name}
-                          </p>
-                          <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
-                            {drug.generic_name} · {cap(drug.category || 'other')}
-                          </p>
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <div className="w-6 h-6 rounded-md bg-gray-100 dark:bg-gray-700/40 flex items-center justify-center shrink-0">
+                            <Icon
+                              name={categoryIcon(product.category)}
+                              size={12}
+                              className="text-gray-500 dark:text-gray-400"
+                            />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
+                              {product.name}
+                            </p>
+                            <p className="text-[11px] text-gray-500 dark:text-gray-400 truncate">
+                              {productSubtitle(product) || categoryLabel(product.category)}
+                            </p>
+                          </div>
                         </div>
                         <div className="shrink-0 text-right">
                           <p className="text-[11px] font-medium text-gray-700 dark:text-gray-300 tabular-nums">
-                            {formatMoney(drug.pharmacy_normal_price)}
+                            {formatMoney(product.normal_price)}
                           </p>
-                          <p
-                            className={[
-                              'text-[10px] tabular-nums',
-                              out
-                                ? 'text-red-600 dark:text-red-400'
-                                : low
-                                  ? 'text-amber-600 dark:text-amber-400'
-                                  : 'text-emerald-600 dark:text-emerald-400',
-                            ].join(' ')}
-                          >
-                            {out ? 'out of stock' : `stock: ${drug.current_stock} ${drug.unit || ''}`}
+                          <p className={[
+                            'text-[10px] tabular-nums',
+                            out ? 'text-red-600 dark:text-red-400'
+                              : low ? 'text-amber-600 dark:text-amber-400'
+                                : 'text-emerald-600 dark:text-emerald-400',
+                          ].join(' ')}>
+                            {out ? 'out of stock' : `stock: ${remaining} ${product.unit || ''}`}
                           </p>
                         </div>
                       </button>
@@ -496,44 +588,44 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                   })}
                 </div>
               )}
-              {showDropdown && !filteredDrugs.length && (
+
+              {showDropdown && !filteredProducts.length && (
                 <div className="absolute z-20 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
-                  {drugsQuery.isLoading ? 'Loading drugs…' : 'No matching drugs'}
+                  {productsQuery.isLoading ? 'Loading items…' : 'No matching items'}
                 </div>
               )}
             </div>
 
-            {/* Selected drug — price tier picker + qty + add button */}
-            {selectedDrug && (
+            {/* Selected item — tier picker + qty */}
+            {selectedProduct && (
               <div className="mt-3 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-3">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
                   <div className="min-w-0 flex-1">
-                    <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
-                      {selectedDrug.name}
-                    </p>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+                        {selectedProduct.name}
+                      </p>
+                      <Badge className={categoryBadgeClass(selectedProduct.category)}>
+                        {categoryLabel(selectedProduct.category)}
+                      </Badge>
+                    </div>
                     <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                      {selectedDrug.generic_name} ·{' '}
-                      <span
-                        className={
-                          selectedDrug.current_stock === 0
-                            ? 'text-red-600 dark:text-red-400'
-                            : selectedDrug.current_stock <= selectedDrug.reorder_level
-                              ? 'text-amber-600 dark:text-amber-400'
-                              : 'text-emerald-600 dark:text-emerald-400'
-                        }
-                      >
-                        Stock: {selectedDrug.current_stock} {selectedDrug.unit || ''}
+                      {productSubtitle(selectedProduct)}
+                      {productSubtitle(selectedProduct) ? ' · ' : ''}
+                      <span className={
+                        selectedProduct.current_stock === 0
+                          ? 'text-red-600 dark:text-red-400'
+                          : selectedProduct.current_stock <= selectedProduct.reorder_level
+                            ? 'text-amber-600 dark:text-amber-400'
+                            : 'text-emerald-600 dark:text-emerald-400'
+                      }>
+                        Stock: {selectedProduct.current_stock} {selectedProduct.unit || ''}
                       </span>
                     </p>
                   </div>
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelectedDrug(null)
-                      setSelectedTier(null)
-                      setQuantity(1)
-                      setSearchQuery('')
-                    }}
+                    onClick={clearSelection}
                     className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
                     aria-label="Clear selection"
                   >
@@ -541,22 +633,25 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                   </button>
                 </div>
 
-                {/* Price tier buttons */}
+                {/* Price tiers */}
                 <div className="mt-3">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1.5">
                     Select Price Tier
                   </p>
                   <div className="grid grid-cols-3 gap-2">
                     {PRICE_TIERS.map((tier) => {
-                      const price = selectedDrug[tier.priceField]
+                      const price = selectedProduct[tier.priceField] || 0
                       const active = selectedTier === tier.key
+                      const unset = price <= 0
                       return (
                         <button
                           key={tier.key}
                           type="button"
                           onClick={() => setSelectedTier(tier.key)}
+                          disabled={unset && tier.key !== 'normal'}
+                          title={unset && tier.key !== 'normal' ? 'No price set for this tier' : undefined}
                           className={[
-                            'px-2 py-2 rounded-lg text-[11px] font-semibold transition-colors border text-center',
+                            'px-2 py-2 rounded-lg text-[11px] font-semibold transition-colors border text-center disabled:opacity-40 disabled:cursor-not-allowed',
                             active
                               ? tier.key === 'normal'
                                 ? 'bg-blue-600 text-white border-blue-600'
@@ -568,7 +663,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                         >
                           <span className="block">{tier.label}</span>
                           <span className="block text-[10px] opacity-90 tabular-nums mt-0.5">
-                            {formatMoney(price)}
+                            {unset ? 'not set' : formatMoney(price)}
                           </span>
                         </button>
                       )
@@ -585,7 +680,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                     <input
                       type="number"
                       min={1}
-                      max={selectedDrug.current_stock}
+                      max={Math.max(1, selectedProduct.current_stock - inCartFor(selectedProduct.id))}
                       value={quantity}
                       onChange={(e) => setQuantity(Math.max(1, Number(e.target.value) || 1))}
                       className="w-full h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
@@ -633,28 +728,30 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
 
             {!cart.length ? (
               <div className="rounded-lg border border-dashed border-gray-200 dark:border-gray-700/60 px-4 py-6 text-center text-[12px] text-gray-400">
-                No items in the cart yet. Search and add drugs above.
+                Nothing in the cart yet. Search and add items above.
               </div>
             ) : (
               <div className="rounded-lg border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-100 dark:divide-gray-700/40">
                 {cart.map((item, i) => (
                   <div key={i} className="flex items-center gap-3 px-3 py-2.5">
-                    <div className="w-7 h-7 rounded-lg bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center shrink-0">
-                      <Icon name="pill" size={14} className="text-purple-600 dark:text-purple-400" />
+                    <div className="w-7 h-7 rounded-lg bg-gray-100 dark:bg-gray-700/40 flex items-center justify-center shrink-0">
+                      <Icon
+                        name={categoryIcon(item.category)}
+                        size={14}
+                        className="text-gray-500 dark:text-gray-400"
+                      />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
                           {item.name}
                         </p>
-                        <span
-                          className={`inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold ${tierBadgeClass(item.price_tier)}`}
-                        >
+                        <span className={`inline-flex items-center px-1.5 py-0 rounded text-[10px] font-semibold ${tierBadgeClass(item.price_tier)}`}>
                           {tierLabel(item.price_tier)}
                         </span>
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 tabular-nums">
-                        {formatMoney(item.unit_price)} × {item.quantity}
+                        {formatMoney(item.unit_price)} × {item.quantity} {item.unit || ''}
                       </p>
                     </div>
                     <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums shrink-0">
@@ -673,15 +770,17 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               </div>
             )}
 
-            {/* Total */}
             <div className="mt-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-center justify-between">
               <span className="text-[11px] font-semibold uppercase tracking-widest text-[#1a6cbf] dark:text-blue-400">
-                Total ({cart.length} item{cart.length !== 1 ? 's' : ''})
+                Total ({cart.length} line{cart.length !== 1 ? 's' : ''})
               </span>
               <span className="text-lg font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">
                 {formatMoney(cartTotal)}
               </span>
             </div>
+            <p className="text-[10px] text-gray-400 mt-1.5">
+              Final prices and tax are confirmed by the server when the sale is recorded.
+            </p>
           </div>
 
           {/* Footer */}
@@ -698,15 +797,9 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               disabled={loading || !cart.length}
               className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? (
-                <>
-                  <Spinner size={14} /> Processing…
-                </>
-              ) : (
-                <>
-                  <Icon name="check" size={14} /> Complete Sale
-                </>
-              )}
+              {loading
+                ? <><Spinner size={14} /> Processing…</>
+                : <><Icon name="check" size={14} /> Complete Sale</>}
             </button>
           </div>
         </form>
@@ -715,17 +808,28 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   )
 }
 
-// ─── Receipt print modal ─────────────────────────────────────────────
+// ─── Receipt ──────────────────────────────────────────────────────────────────
+
 function ReceiptModal({ sale, soldBy, onClose }) {
   const items = sale.items || []
-  const total = items.reduce((s, i) => s + i.unit_price * i.quantity, 0)
+  const total = sale.total ?? items.reduce((s, i) => s + i.unit_price * i.quantity, 0)
+  const taxTotal = sale.tax_total ?? items.reduce((s, i) => s + (i.tax_amount || 0), 0)
+
+  // The clinic's name, address, phone and email were hardcoded here while
+  // ClinicSettings already stored all four. Falls back to a placeholder only
+  // if the settings row has not been filled in.
+  const profileQuery = useQuery({
+    queryKey: ['pharmacy', 'clinic-profile'],
+    queryFn: () => api.get('/api/admin/settings'),
+    staleTime: 5 * 60 * 1000,
+  })
+  const clinic = profileQuery.data?.settings || {}
 
   return (
     <div
       className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 print:bg-white print:p-0 print:block"
       onClick={onClose}
     >
-      {/* Print-only CSS: hide everything except the .print-area when printing */}
       <style>{`
         @media print {
           body * { visibility: hidden !important; }
@@ -746,18 +850,18 @@ function ReceiptModal({ sale, soldBy, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 print-area">
-          {/* Clinic header */}
+          {/* Clinic header — from settings */}
           <div className="text-center border-b border-dashed border-gray-300 pb-3 mb-3">
-            <h2 className="text-[15px] font-bold tracking-tight">City Health Clinic</h2>
-            <p className="text-[10px] text-gray-600 mt-0.5">123 Moi Avenue, Nairobi</p>
-            <p className="text-[10px] text-gray-600">Tel: +254 700 000 000</p>
-            <p className="text-[10px] text-gray-600">help@cityhealthclinic.co.ke</p>
+            <h2 className="text-[15px] font-bold tracking-tight">{clinic.name || 'Clinic'}</h2>
+            {clinic.tagline && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.tagline}</p>}
+            {clinic.address && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.address}</p>}
+            {clinic.phone && <p className="text-[10px] text-gray-600">Tel: {clinic.phone}</p>}
+            {clinic.email && <p className="text-[10px] text-gray-600">{clinic.email}</p>}
           </div>
 
-          {/* Receipt meta */}
           <div className="text-center mb-3">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">
-              OTC Sales Receipt
+              Sales Receipt
             </p>
             <p className="text-[14px] font-bold text-black mt-0.5">{sale.receipt_number}</p>
           </div>
@@ -798,7 +902,9 @@ function ReceiptModal({ sale, soldBy, onClose }) {
                   </p>
                 </div>
                 <span className="col-span-2 text-right tabular-nums self-center">{item.quantity}</span>
-                <span className="col-span-2 text-right tabular-nums self-center">{formatMoney(item.unit_price)}</span>
+                <span className="col-span-2 text-right tabular-nums self-center">
+                  {formatMoney(item.unit_price)}
+                </span>
                 <span className="col-span-2 text-right tabular-nums font-medium self-center">
                   {formatMoney(item.unit_price * item.quantity)}
                 </span>
@@ -808,21 +914,25 @@ function ReceiptModal({ sale, soldBy, onClose }) {
 
           {/* Total */}
           <div className="mt-3 pt-2 border-t-2 border-black">
+            {taxTotal > 0 && (
+              <div className="flex justify-between items-center text-[11px] text-gray-600 mb-1">
+                <span>Of which tax</span>
+                <span className="tabular-nums">{formatMoney(taxTotal)}</span>
+              </div>
+            )}
             <div className="flex justify-between items-center">
               <span className="text-[12px] font-bold uppercase tracking-widest">Total</span>
               <span className="text-[16px] font-bold tabular-nums">{formatMoney(total)}</span>
             </div>
           </div>
 
-          {/* Footer */}
           <div className="text-center mt-4 pt-3 border-t border-dashed border-gray-300">
-            <p className="text-[10px] text-gray-600">Thank you for shopping with us!</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Keep this receipt for returns/exchanges.</p>
-            <p className="text-[9px] text-gray-400 mt-1.5">This is a computer-generated receipt.</p>
+            <p className="text-[10px] text-gray-600">Thank you for shopping with us.</p>
+            <p className="text-[10px] text-gray-600 mt-0.5">Keep this receipt for returns and exchanges.</p>
+            <p className="text-[9px] text-gray-400 mt-1.5">Computer-generated receipt.</p>
           </div>
         </div>
 
-        {/* Actions (hidden when printing) */}
         <div className="p-4 border-t border-gray-200 flex gap-2 no-print">
           <button
             onClick={() => window.print()}

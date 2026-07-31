@@ -1,23 +1,5 @@
 'use client'
 
-// InventoryTab — Admin inventory management with 4 internal sub-tabs.
-// Sub-tab selection is component-local useState (no URL routing) since
-// the parent /admin/inventory page already owns the URL.
-//
-// All four sub-tabs are admin-authed (mounted under router.use(authorize('admin'))):
-//   Lab Stock         → GET/POST/PUT/DELETE /api/admin/lab-stock
-//                       PATCH /api/admin/lab-stock/:id/quantity { adjustment }
-//   Drug Stock        → GET/POST/PUT/DELETE /api/admin/drug-stock
-//                       PATCH /api/admin/drug-stock/:id/quantity { adjustment }
-//   Charge Templates  → GET/POST /api/admin/charge-templates
-//                       PATCH/DELETE /api/admin/charge-templates/:id
-//   Restock Verify    → GET /api/admin/restocks
-//                       PATCH /api/admin/restocks/:id/verify | /reject
-//
-// Fetch strategy: lazy per sub-tab. Only the mounted sub-tab's query fires.
-// Restock verification cross-invalidates lab + drug stock so approved stock
-// shows immediately if those tabs are revisited.
-
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -31,8 +13,7 @@ import {
 
 const SUB_TABS = [
   { key: 'lab', label: 'Lab Stock', icon: 'flask' },
-  { key: 'drug', label: 'Drug Stock', icon: 'pillBottle' },
-  { key: 'charges', label: 'Charge Templates', icon: 'tag' },
+  { key: 'drug', label: 'Pharmacy Stock', icon: 'pillBottle' },
   { key: 'restocks', label: 'Restock Verification', icon: 'checkCircle' },
 ]
 
@@ -65,13 +46,7 @@ const DRUG_CATEGORIES = ['antibiotic', 'analgesic', 'antihypertensive', 'antidia
 const DRUG_FORMS = ['tablet', 'capsule', 'injection', 'syrup', 'cream', 'drops']
 const LAB_CATEGORIES = ['supplies', 'hematology', 'chemistry', 'urinalysis', 'microbiology']
 
-// ChargeCategory enum — must match schema exactly
-const TEMPLATE_CATEGORIES = [
-  { key: 'consultation', label: 'Consultation' },
-  { key: 'procedure', label: 'Procedure' },
-  { key: 'lab', label: 'Lab Test' },
-  { key: 'medication', label: 'Medication' },
-]
+
 
 function daysUntil(dateStr) {
   if (!dateStr) return null
@@ -122,7 +97,6 @@ export default function InventoryTab() {
 
       {sub === 'lab' && <LabStockSubTab />}
       {sub === 'drug' && <DrugStockSubTab />}
-      {sub === 'charges' && <ChargeTemplatesSubTab />}
       {sub === 'restocks' && <RestockVerificationSubTab />}
     </div>
   )
@@ -489,7 +463,7 @@ function DrugStockSubTab() {
     )
   }
   if (q.isError) {
-    return <ErrorState message={q.error?.message || 'Could not load drug stock'} onRetry={q.refetch} />
+    return <ErrorState message={q.error?.message || 'Could not load pharmacy stock'} onRetry={q.refetch} />
   }
 
   const items = Array.isArray(q.data?.items) ? q.data.items : []
@@ -525,7 +499,7 @@ function DrugStockSubTab() {
       </div>
 
       <Card className="overflow-hidden">
-        <CardHeader title="Drug Stock" subtitle={`${filtered.length} of ${items.length} item${items.length === 1 ? '' : 's'}`}
+        <CardHeader title="Pharmacy Stock" subtitle={`${filtered.length} of ${items.length} item${items.length === 1 ? '' : 's'}`}
           action={
             <button onClick={() => setShowAddDrug(true)} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5">
               <Icon name="plus" size={14} /> Add Drug
@@ -533,7 +507,7 @@ function DrugStockSubTab() {
           }
         />
         {filtered.length === 0 ? (
-          <EmptyState icon="pillBottle" title="No drugs found" description={search ? 'Try a different search term.' : 'Drug stock will appear here.'} />
+          <EmptyState icon="pillBottle" title="No drugs found" description={search ? 'Try a different search term.' : 'Pharmacy stock will appear here.'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -666,347 +640,6 @@ function DrugStockSubTab() {
         />
       )}
     </div>
-  )
-}
-
-// ─── Sub-tab 3: Charge Templates ─────────────────────────────────
-function ChargeTemplatesSubTab() {
-  const queryClient = useQueryClient()
-  const [showAdd, setShowAdd] = useState(false)
-  const [editingId, setEditingId] = useState(null)
-
-  const q = useQuery({
-    queryKey: ['admin', 'charge-templates'],
-    queryFn: () => api.get('/api/admin/charge-templates'),
-    staleTime: 60000,
-  })
-
-  const addMut = useMutation({
-    mutationFn: (body) => api.post('/api/admin/charge-templates', {
-      name: body.name, category: body.category, amount: Number(body.price), is_active: body.is_active,
-    }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
-  })
-  const editMut = useMutation({
-    mutationFn: ({ id, body }) => {
-      const patch = {}
-      if (body.price != null) patch.amount = Number(body.price)
-      if (body.is_active != null) patch.is_active = body.is_active
-      if (body.name != null) patch.name = body.name
-      if (body.category != null) patch.category = body.category
-      return api.patch(`/api/admin/charge-templates/${id}`, patch)
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
-  })
-  const delMut = useMutation({
-    mutationFn: (id) => api.delete(`/api/admin/charge-templates/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
-  })
-
-  if (q.isLoading) {
-    return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
-        </div>
-        <SkeletonTable rows={6} cols={5} />
-      </div>
-    )
-  }
-  if (q.isError) {
-    return <ErrorState message={q.error?.message || 'Could not load charge templates'} onRetry={q.refetch} />
-  }
-
-  // Single ChargeTemplate table. Alias amount -> price for the existing UI.
-  const templates = Array.isArray(q.data?.templates) ? q.data.templates : []
-  const all = templates.map((t) => ({ ...t, price: t.amount }))
-
-  // Group by category
-  const groups = {}
-  for (const t of all) {
-    const key = t.category || 'other'
-    if (!groups[key]) groups[key] = []
-    groups[key].push(t)
-  }
-  const groupOrder = ['consultation', 'procedure', 'lab', 'medication']
-  const sortedGroups = Object.entries(groups).sort((a, b) => {
-    const ai = groupOrder.indexOf(a[0])
-    const bi = groupOrder.indexOf(b[0])
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
-  })
-
-  const activeCount = all.filter((t) => t.is_active).length
-  const avg = all.length ? all.reduce((s, t) => s + (Number(t.price) || 0), 0) / all.length : 0
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Total Templates" value={all.length} icon="tag" color="blue" sublabel="chargeable services" />
-        <StatTile label="Active" value={activeCount} icon="checkCircle" color="green" sublabel="available for billing" />
-        <StatTile label="Inactive" value={all.length - activeCount} icon="archive" color="slate" sublabel="hidden from billing" />
-        <StatTile label="Avg Charge" value={formatMoney(avg)} icon="dollarSign" color="amber" sublabel="across all templates" />
-      </div>
-
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[12px] text-gray-500 dark:text-gray-400">
-          {sortedGroups.length} categor{sortedGroups.length === 1 ? 'y' : 'ies'} · inline-edit amount, toggle active, or delete
-        </p>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center gap-1.5"
-        >
-          <Icon name="plus" size={14} /> Add Template
-        </button>
-      </div>
-
-      {sortedGroups.length === 0 ? (
-        <EmptyState icon="tag" title="No charge templates" description="Add your first chargeable service to get started." />
-      ) : (
-        <div className="space-y-4">
-          {sortedGroups.map(([cat, items]) => (
-            <Card key={cat} className="overflow-hidden">
-              <CardHeader
-                title={cap(cat)}
-                subtitle={`${items.length} template${items.length === 1 ? '' : 's'}`}
-                action={<Badge className={CATEGORY_BADGES[cat] || CATEGORY_BADGES.other}>{cap(cat)}</Badge>}
-              />
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
-                      <Th>Name</Th>
-                      <Th align="left" className="hidden sm:table-cell">Category</Th>
-                      <Th align="right">Amount</Th>
-                      <Th align="center">Active</Th>
-                      <Th align="right">Actions</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
-                    {items.map((t) => (
-                      <ChargeTemplateRow
-                        key={t.id}
-                        template={t}
-                        isEditing={editingId === t.id}
-                        loading={editMut.isPending || delMut.isPending}
-                        onEdit={() => setEditingId(editingId === t.id ? null : t.id)}
-                        onToggle={async () => {
-                          try {
-                            await editMut.mutateAsync({ id: t.id, body: { is_active: !t.is_active } })
-                            toast.success(`${t.name} ${t.is_active ? 'deactivated' : 'activated'}`)
-                          } catch (err) {
-                            toast.error(err.message || 'Could not update template')
-                          }
-                        }}
-                        onSave={async (price) => {
-                          try {
-                            await editMut.mutateAsync({ id: t.id, body: { price: Number(price) } })
-                            toast.success(`${t.name} amount updated`)
-                            setEditingId(null)
-                          } catch (err) {
-                            toast.error(err.message || 'Could not update amount')
-                          }
-                        }}
-                        onDelete={async () => {
-                          if (!confirm(`Delete "${t.name}"? This cannot be undone.`)) return
-                          try {
-                            await delMut.mutateAsync(t.id)
-                            toast.success('Template deleted')
-                          } catch (err) {
-                            toast.error(err.message || 'Could not delete template')
-                          }
-                        }}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {showAdd && (
-        <AddTemplateModal
-          loading={addMut.isPending}
-          onClose={() => setShowAdd(false)}
-          onSubmit={async (body) => {
-            try {
-              await addMut.mutateAsync(body)
-              toast.success('Template added')
-              setShowAdd(false)
-            } catch (err) {
-              toast.error(err.message || 'Could not add template')
-            }
-          }}
-        />
-      )}
-    </div>
-  )
-}
-
-function ChargeTemplateRow({ template, isEditing, loading, onEdit, onToggle, onSave, onDelete }) {
-  const [price, setPrice] = useState(String(template.price || 0))
-
-  // Re-sync the local price input when the parent template price changes
-  // (e.g. after a successful save round-trip or external mutation).
-  useEffect(() => {
-    if (!isEditing) setPrice(String(template.price || 0))
-  }, [template.price, isEditing])
-
-  return (
-    <tr className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
-      <td className="px-4 py-3">
-        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{template.name}</p>
-        <p className="text-[10px] text-gray-400 uppercase tracking-wider sm:hidden">{cap(template.category)}</p>
-      </td>
-      <td className="px-4 py-3 hidden sm:table-cell">
-        <Badge className={CATEGORY_BADGES[template.category] || CATEGORY_BADGES.other}>{cap(template.category)}</Badge>
-      </td>
-      <td className="px-4 py-3 text-right">
-        {isEditing ? (
-          <div className="flex items-center justify-end gap-1.5">
-            <span className="text-[11px] text-gray-400">KSh</span>
-            <input
-              type="number"
-              min="0"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="w-24 px-2 py-1 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 tabular-nums"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') onSave(price)
-                if (e.key === 'Escape') onEdit()
-              }}
-            />
-          </div>
-        ) : (
-          <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(template.price)}</span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-center">
-        <button
-          onClick={onToggle}
-          disabled={loading}
-          title={template.is_active ? 'Active — click to deactivate' : 'Inactive — click to activate'}
-          className={[
-            'relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50',
-            template.is_active ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600',
-          ].join(' ')}
-        >
-          <span
-            className={[
-              'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform',
-              template.is_active ? 'translate-x-5' : 'translate-x-1',
-            ].join(' ')}
-          />
-        </button>
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center justify-end gap-1">
-          {isEditing ? (
-            <>
-              <RowAction icon="check" label="Save" color="blue" onClick={() => onSave(price)} disabled={loading} />
-              <RowAction icon="x" label="Cancel" onClick={onEdit} disabled={loading} />
-            </>
-          ) : (
-            <>
-              <RowAction icon="edit" label="Edit amount" color="amber" onClick={onEdit} disabled={loading} />
-              <RowAction icon="trash" label="Delete" color="red" onClick={onDelete} disabled={loading} />
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
-  )
-}
-
-function AddTemplateModal({ loading, onClose, onSubmit }) {
-  const [name, setName] = useState('')
-  const [category, setCategory] = useState('procedure')
-  const [price, setPrice] = useState('')
-  const [isActive, setIsActive] = useState(true)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!name.trim()) {
-      toast.error('Name is required')
-      return
-    }
-    const numPrice = Number(price)
-    if (!Number.isFinite(numPrice) || numPrice < 0) {
-      toast.error('Amount must be a non-negative number')
-      return
-    }
-    await onSubmit({ name: name.trim(), category, price: numPrice, is_active: isActive })
-  }
-
-  return (
-    <ModalShell
-      title="Add Charge Template"
-      subtitle="Create a new chargeable service line"
-      onClose={onClose}
-      footer={
-        <>
-          <button type="button" onClick={onClose} disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
-            Cancel
-          </button>
-          <button type="submit" form="add-template-form" disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
-            {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
-            {loading ? 'Saving…' : 'Add Template'}
-          </button>
-        </>
-      }
-    >
-      <form id="add-template-form" onSubmit={handleSubmit} className="space-y-4">
-        <Field label="Name *">
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. ECG, Ultrasound, Depo-Provera Injection"
-            className={inputCls}
-            autoFocus
-          />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Category *">
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className={inputCls}
-            >
-              {TEMPLATE_CATEGORIES.map((c) => (
-                <option key={c.key} value={c.key}>{c.label}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Amount (KSh) *">
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="0"
-              className={`${inputCls} tabular-nums`}
-            />
-          </Field>
-        </div>
-        <Field label="Status">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isActive}
-              onChange={(e) => setIsActive(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-[#1a6cbf] focus:ring-[#1a6cbf]/40"
-            />
-            <span className="text-[13px] text-gray-700 dark:text-gray-300">Active (available for billing)</span>
-          </label>
-        </Field>
-      </form>
-    </ModalShell>
   )
 }
 
@@ -1396,7 +1029,7 @@ function AddDrugModal({ loading, onClose, onSubmit }) {
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
   const valid = form.name.trim() && form.quantity !== ''
   return (
-    <ModalShell title="Add Drug to Inventory" subtitle="Create a new drug stock item" onClose={onClose} maxWidth="max-w-lg"
+    <ModalShell title="Add Drug to Inventory" subtitle="Create a new pharmacy stock item" onClose={onClose} maxWidth="max-w-lg"
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>

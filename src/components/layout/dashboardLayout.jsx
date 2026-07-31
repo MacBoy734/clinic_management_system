@@ -24,7 +24,7 @@ const NAV_BY_ROLE = {
     { href: '/doctor', label: 'Patient Queue', icon: 'list' },
     { href: '/doctor/consultation', label: 'Consultation Room', icon: 'stethoscope' },
     { href: '/doctor/patients', label: 'Patient Database', icon: 'users' },
-    { href: '/doctor/drugs', label: 'Drugs stock', icon: 'pillBottle' },
+    { href: '/doctor/pharmacy_stock', label: 'pharmacy stock', icon: 'pillBottle' },
     { href: '/doctor/orders', label: 'Pharmacy Orders', icon: 'shoppingCart' },
     { href: '/doctor/notifications', label: 'Notifications', icon: 'bell' },
   ],
@@ -37,7 +37,7 @@ const NAV_BY_ROLE = {
   ],
   pharmacist: [
     { href: '/pharmacy', label: 'Prescription Queue', icon: 'list' },
-    { href: '/pharmacy/stock', label: 'Drug Stock', icon: 'pillBottle' },
+    { href: '/pharmacy/stock', label: 'Stock', icon: 'pillBottle' },
     { href: '/pharmacy/sales', label: 'OTC Sales', icon: 'store' },
     { href: '/pharmacy/orders', label: 'Internal Orders', icon: 'shoppingCart' },
     { href: '/pharmacy/expenses', label: 'Expenses', icon: 'trendDown' },

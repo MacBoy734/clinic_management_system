@@ -1,18 +1,5 @@
 'use client'
 
-// ReportsTab — Admin reports dashboard with 5 internal sub-tabs.
-// Sub-tab selection is component-local useState (no URL routing) since
-// the parent /admin/reports page already owns the URL.
-//
-// Sub-tabs (all share a Date Range picker + Export CSV):
-//   Revenue   → GET /api/admin/revenue/week + GET /api/admin/stats
-//   Visits    → GET /api/admin/stats
-//   Lab       → GET /api/lab/stats
-//   Pharmacy  → GET /api/pharmacy/queue (with by_day + top_drugs) + GET /api/expenses?department=pharmacy
-//   Staff     → GET /api/admin/staff (with visits_handled, prescriptions_written, lab_orders_placed)
-//
-// Charts: recharts BarChart + LineChart with ResponsiveContainer.
-
 import { useState, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery } from '@tanstack/react-query'
@@ -24,40 +11,22 @@ import api from '@/lib/api'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, Icon,
   SkeletonCard, SkeletonTable,
-  formatMoney, formatDate, cap,
+  formatMoney, cap,
 } from '@/utils/helpers'
 
 const SUB_TABS = [
-  { key: 'revenue', label: 'Revenue', icon: 'dollarSign' },
   { key: 'visits', label: 'Visits', icon: 'users' },
   { key: 'lab', label: 'Lab', icon: 'flask' },
-  { key: 'pharmacy', label: 'Pharmacy', icon: 'pillBottle' },
-  { key: 'staff', label: 'Staff', icon: 'user' },
+  { key: 'pharmacy', label: 'Pharmacy', icon: 'pillBottle' }
 ]
 
 const DATE_PRESETS = [
-  { key: 'today', label: 'Today' },
-  { key: 'week', label: 'This Week' },
-  { key: 'month', label: 'This Month' },
-  { key: 'last_month', label: 'Last Month' },
-  { key: 'custom', label: 'Custom' },
+  { key: 'today', label: 'Today', apiRange: 'today' },
+  { key: '7d', label: '7 days', apiRange: '7d' },
+  { key: '30d', label: '30 days', apiRange: '30d' },
+  { key: 'month', label: 'This Month', apiRange: 'month' },
+  { key: 'custom', label: 'Custom', apiRange: 'custom' },
 ]
-
-const ROLE_BADGES = {
-  doctor: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  lab_tech: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-  pharmacist: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
-  receptionist: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  admin: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-}
-
-const ROLE_LABELS = {
-  doctor: 'Doctor',
-  lab_tech: 'Lab Tech',
-  pharmacist: 'Pharmacist',
-  receptionist: 'Receptionist',
-  admin: 'Admin',
-}
 
 const VISIT_TYPE_BADGES = {
   consultation: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -71,20 +40,6 @@ const VISIT_TYPE_LABELS = {
   injection: 'Procedure',
   family_planning: 'Family Planning',
   direct_lab: 'Direct Lab',
-}
-
-const PAYMENT_METHOD_COLORS = {
-  cash: '#10b981',
-  mpesa: '#1a6cbf',
-  insurance: '#a855f7',
-  other: '#6b7280',
-}
-
-const PAYMENT_METHOD_LABELS = {
-  cash: 'Cash',
-  mpesa: 'M-Pesa',
-  insurance: 'Insurance',
-  other: 'Other',
 }
 
 // Shared chart tooltip styled for both light + dark mode
@@ -106,10 +61,22 @@ function ChartTooltip({ active, payload, label, formatter }) {
   )
 }
 
+// Builds the query string sent to every report endpoint. For everything but
+// 'custom' the backend only needs `range`; for 'custom' it also needs
+// explicit start/end dates since there's no preset to derive them from.
+function buildRangeQuery(range) {
+  const params = new URLSearchParams({ range: range.apiRange })
+  if (range.apiRange === 'custom') {
+    params.set('start', range.startISO)
+    params.set('end', range.endISO)
+  }
+  return params.toString()
+}
+
 // ─── Main component ───────────────────────────────────────────────
 export default function ReportsTab() {
-  const [sub, setSub] = useState('revenue')
-  const [preset, setPreset] = useState('week')
+  const [sub, setSub] = useState('visits')
+  const [preset, setPreset] = useState('7d')
   const [customStart, setCustomStart] = useState(() => {
     const d = new Date()
     d.setDate(d.getDate() - 7)
@@ -117,36 +84,42 @@ export default function ReportsTab() {
   })
   const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10))
 
-  // Derived date range for display + CSV
+  // Derived date range for display, CSV naming, and the query string sent
+  // to the backend. `apiRange` + `startISO`/`endISO` are what actually
+  // drive refetching — see buildRangeQuery and each sub-tab's queryKey.
   const range = useMemo(() => {
     const today = new Date()
     today.setHours(0, 0, 0, 0)
     const fmt = (d) => d.toISOString().slice(0, 10)
+
     switch (preset) {
-      case 'today':
-        return { start: today, end: today, label: 'Today' }
-      case 'week': {
+      case 'today': {
+        return { start: today, end: today, label: 'Today', apiRange: 'today', startISO: fmt(today), endISO: fmt(today) }
+      }
+      case '7d': {
         const start = new Date(today)
         start.setDate(start.getDate() - 6) // last 7 days inclusive
-        return { start, end: today, label: 'This Week' }
+        return { start, end: today, label: 'Last 7 Days', apiRange: '7d', startISO: fmt(start), endISO: fmt(today) }
+      }
+      case '30d': {
+        const start = new Date(today)
+        start.setDate(start.getDate() - 29) // last 30 days inclusive
+        return { start, end: today, label: 'Last 30 Days', apiRange: '30d', startISO: fmt(start), endISO: fmt(today) }
       }
       case 'month': {
         const start = new Date(today.getFullYear(), today.getMonth(), 1)
-        return { start, end: today, label: 'This Month' }
-      }
-      case 'last_month': {
-        const start = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-        const end = new Date(today.getFullYear(), today.getMonth(), 0)
-        return { start, end, label: 'Last Month' }
+        return { start, end: today, label: 'This Month', apiRange: 'month', startISO: fmt(start), endISO: fmt(today) }
       }
       case 'custom': {
         const s = new Date(customStart)
         const e = new Date(customEnd)
-        if (isNaN(s.getTime()) || isNaN(e.getTime())) return { start: today, end: today, label: 'Custom' }
-        return { start: s, end: e, label: `${fmt(s)} → ${fmt(e)}` }
+        if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+          return { start: today, end: today, label: 'Custom', apiRange: 'custom', startISO: fmt(today), endISO: fmt(today) }
+        }
+        return { start: s, end: e, label: `${fmt(s)} → ${fmt(e)}`, apiRange: 'custom', startISO: fmt(s), endISO: fmt(e) }
       }
       default:
-        return { start: today, end: today, label: 'Today' }
+        return { start: today, end: today, label: 'Last 7 Days', apiRange: '7d', startISO: fmt(today), endISO: fmt(today) }
     }
   }, [preset, customStart, customEnd])
 
@@ -167,7 +140,7 @@ export default function ReportsTab() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${filename}-${range.start.toISOString().slice(0, 10)}-to-${range.end.toISOString().slice(0, 10)}.csv`
+    a.download = `${filename}-${range.startISO}-to-${range.endISO}.csv`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -199,6 +172,7 @@ export default function ReportsTab() {
       <Card className="p-3">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 justify-between">
           <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] uppercase tracking-widest text-gray-400 mr-1 hidden sm:inline">Range</span>
             {DATE_PRESETS.map((p) => (
               <button
                 key={p.key}
@@ -246,23 +220,14 @@ export default function ReportsTab() {
         </div>
       </Card>
 
-      {sub === 'revenue' && <RevenueSubTab range={range} exportCsv={exportCsv} />}
       {sub === 'visits' && <VisitsSubTab range={range} exportCsv={exportCsv} />}
       {sub === 'lab' && <LabSubTab range={range} exportCsv={exportCsv} />}
       {sub === 'pharmacy' && <PharmacySubTab range={range} exportCsv={exportCsv} />}
-      {sub === 'staff' && <StaffSubTab range={range} exportCsv={exportCsv} />}
     </div>
   )
 }
 
-// Collects the exportable rows for the current sub-tab by reading from
-// the React Query cache. Avoids re-fetching since data is already loaded.
 function collectExportRows(sub) {
-  // The data lives inside React Query's cache, but we don't have direct
-  // access here without a queryClient hook. Instead, we expose per-sub-tab
-  // export via the component instance (each sub-tab calls exportCsv with
-  // its own rows). The header button is a fallback that exports an empty
-  // hint when called directly.
   return [{ note: 'Use the Export CSV button inside each report section' }]
 }
 
@@ -274,6 +239,7 @@ function StatTile({ label, value, icon, color = 'blue', sublabel }) {
     amber: { card: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50', val: 'text-amber-700 dark:text-amber-400', ic: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400' },
     red: { card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50', val: 'text-red-700 dark:text-red-400', ic: 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' },
     purple: { card: 'bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-900/50', val: 'text-purple-700 dark:text-purple-400', ic: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400' },
+    cyan: { card: 'bg-cyan-50 border-cyan-200 dark:bg-cyan-950/30 dark:border-cyan-900/50', val: 'text-cyan-700 dark:text-cyan-400', ic: 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900/40 dark:text-cyan-400' },
     slate: { card: 'bg-white border-gray-200 dark:bg-[#1e293b] dark:border-gray-700/60', val: 'text-gray-700 dark:text-gray-300', ic: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
   }
   const c = colors[color] || colors.blue
@@ -307,158 +273,11 @@ function Th({ children, align = 'left', className = '' }) {
   )
 }
 
-// ─── Sub-tab 1: Revenue ──────────────────────────────────────────
-function RevenueSubTab({ range, exportCsv }) {
-  const weekQ = useQuery({
-    queryKey: ['admin', 'reports', 'revenue'],
-    queryFn: () => api.get('/api/admin/revenue/week'),
-    staleTime: 60000,
-  })
-  const statsQ = useQuery({
-    queryKey: ['admin', 'reports', 'stats-revenue'],
-    queryFn: () => api.get('/api/admin/revenue-report'),
-    staleTime: 30000,
-  })
-
-  if (weekQ.isLoading || statsQ.isLoading) {
-    return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
-        </div>
-        <SkeletonTable rows={4} cols={4} />
-      </div>
-    )
-  }
-  if (weekQ.isError) return <ErrorState message={weekQ.error?.message || 'Could not load revenue'} onRetry={weekQ.refetch} />
-  if (statsQ.isError) return <ErrorState message={statsQ.error?.message || 'Could not load stats'} onRetry={statsQ.refetch} />
-
-  const weekData = Array.isArray(weekQ.data?.data) ? weekQ.data.data : []
-  const stats = statsQ.data?.stats || {}
-
-  const totalRevenue = weekData.reduce((s, d) => s + (Number(d.revenue) || 0), 0)
-  const totalExpenses = weekData.reduce((s, d) => s + (Number(d.expenses) || 0), 0)
-  const netIncome = totalRevenue - totalExpenses
-  const avgDailyRevenue = weekData.length > 0 ? Math.round(totalRevenue / weekData.length) : 0
-
-  // Payment method breakdown from /api/admin/stats' dailyReport (server-side sum)
-  // The /api/admin/stats endpoint exposes this via stats; if missing we fall back to weekly
-  const methodBreakdown = stats.by_payment_method || {
-    cash: Math.round(totalRevenue * 0.25),
-    mpesa: Math.round(totalRevenue * 0.55),
-    insurance: Math.round(totalRevenue * 0.15),
-    other: Math.round(totalRevenue * 0.05),
-  }
-  const methodTotal = Object.values(methodBreakdown).reduce((s, v) => s + (Number(v) || 0), 0) || 1
-  const methodRows = Object.entries(methodBreakdown).map(([key, value]) => ({
-    key,
-    label: PAYMENT_METHOD_LABELS[key] || cap(key),
-    value: Number(value) || 0,
-    pct: Math.round(((Number(value) || 0) / methodTotal) * 100),
-    color: PAYMENT_METHOD_COLORS[key] || '#6b7280',
-  })).sort((a, b) => b.value - a.value)
-
-  // CSV export — last 7 days revenue + expenses
-  const exportRows = weekData.map((d) => ({
-    Day: d.day,
-    Date: range.label,
-    Revenue: d.revenue,
-    Expenses: d.expenses,
-    Net: (Number(d.revenue) || 0) - (Number(d.expenses) || 0),
-  }))
-
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Total Revenue" value={formatMoney(totalRevenue)} icon="dollarSign" color="green" sublabel={`${weekData.length} day${weekData.length === 1 ? '' : 's'}`} />
-        <StatTile label="Total Expenses" value={formatMoney(totalExpenses)} icon="trendDown" color="red" sublabel="operational" />
-        <StatTile label="Net Income" value={formatMoney(netIncome)} icon={netIncome >= 0 ? 'trendUp' : 'trendDown'} color={netIncome >= 0 ? 'blue' : 'red'} sublabel={netIncome >= 0 ? 'profit' : 'loss'} />
-        <StatTile label="Avg Daily Revenue" value={formatMoney(avgDailyRevenue)} icon="barChart" color="purple" sublabel="per day" />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* BarChart: daily revenue */}
-        <Card className="lg:col-span-2 overflow-hidden">
-          <CardHeader
-            title="Daily Revenue"
-            subtitle="last 7 days"
-            action={
-              <button
-                onClick={() => exportCsv('revenue-daily', exportRows)}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 flex items-center gap-1.5"
-              >
-                <Icon name="download" size={12} /> CSV
-              </button>
-            }
-          />
-          <div className="p-4">
-            {weekData.length === 0 ? (
-              <EmptyState icon="barChart" title="No revenue data" description="Revenue will appear here once visits are billed." />
-            ) : (
-              <ResponsiveContainer width="100%" height={260}>
-                <BarChart data={weekData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#94a3b8" strokeOpacity={0.18} vertical={false} />
-                  <XAxis
-                    dataKey="day"
-                    tick={{ fontSize: 11, fill: '#94a3b8' }}
-                    axisLine={{ stroke: '#94a3b8', strokeOpacity: 0.3 }}
-                    tickLine={false}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 11, fill: '#94a3b8' }}
-                    axisLine={false}
-                    tickLine={false}
-                    tickFormatter={(v) => (v >= 1000 ? `${Math.round(v / 1000)}k` : v)}
-                  />
-                  <Tooltip
-                    cursor={{ fill: '#1a6cbf', fillOpacity: 0.08 }}
-                    content={<ChartTooltip formatter={(v) => formatMoney(v)} />}
-                  />
-                  <Bar
-                    dataKey="revenue"
-                    name="Revenue"
-                    fill="#1a6cbf"
-                    radius={[6, 6, 0, 0]}
-                    maxBarSize={48}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </div>
-        </Card>
-
-        {/* Payment method breakdown */}
-        <Card className="overflow-hidden">
-          <CardHeader title="Payment Methods" subtitle="revenue share" />
-          <div className="p-4 space-y-3">
-            {methodRows.map((m) => (
-              <div key={m.key}>
-                <div className="flex items-center justify-between text-[12px] mb-1">
-                  <span className="text-gray-700 dark:text-gray-300 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full" style={{ background: m.color }} />
-                    {m.label}
-                  </span>
-                  <span className="font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
-                    {formatMoney(m.value)} <span className="text-gray-400 font-normal">· {m.pct}%</span>
-                  </span>
-                </div>
-                <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700/60 overflow-hidden">
-                  <div className="h-full rounded-full transition-all" style={{ width: `${m.pct}%`, background: m.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      </div>
-    </div>
-  )
-}
-
-// ─── Sub-tab 2: Visits ───────────────────────────────────────────
+// ─── Sub-tab 1: Visits ───────────────────────────────────────────
 function VisitsSubTab({ range, exportCsv }) {
   const statsQ = useQuery({
-    queryKey: ['admin', 'reports', 'visits'],
-    queryFn: () => api.get('/api/admin/visits-report'),
+    queryKey: ['admin', 'reports', 'visits', range.apiRange, range.startISO, range.endISO],
+    queryFn: () => api.get(`/api/admin/reports/visits?${buildRangeQuery(range)}`),
     staleTime: 30000,
   })
 
@@ -498,7 +317,6 @@ function VisitsSubTab({ range, exportCsv }) {
     Percentage: `${r.pct}%`,
   }))
 
-  // For the LineChart we adapt byDay data
   const chartData = byDay.map((d) => ({ day: d.day, visits: d.count }))
 
   return (
@@ -515,7 +333,7 @@ function VisitsSubTab({ range, exportCsv }) {
         <Card className="lg:col-span-2 overflow-hidden">
           <CardHeader
             title="Visits Per Day"
-            subtitle="last 7 days"
+            subtitle={range.label}
             action={
               <button
                 onClick={() => exportCsv('visits-daily', chartData.map((d) => ({ Day: d.day, Visits: d.visits })))}
@@ -611,11 +429,11 @@ function VisitsSubTab({ range, exportCsv }) {
   )
 }
 
-// ─── Sub-tab 3: Lab ──────────────────────────────────────────────
+// ─── Sub-tab 2: Lab ──────────────────────────────────────────────
 function LabSubTab({ range, exportCsv }) {
   const q = useQuery({
-    queryKey: ['admin', 'reports', 'lab'],
-    queryFn: () => api.get('/api/lab/stats'),
+    queryKey: ['admin', 'reports', 'lab', range.apiRange, range.startISO, range.endISO],
+    queryFn: () => api.get(`/api/admin/reports/lab?${buildRangeQuery(range)}`),
     staleTime: 30000,
   })
 
@@ -644,7 +462,7 @@ function LabSubTab({ range, exportCsv }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatTile label="Total Requests" value={totalRequests} icon="testTube" color="purple" sublabel="all-time" />
+        <StatTile label="Total Requests" value={totalRequests} icon="testTube" color="purple" sublabel="in selected range" />
         <StatTile label="Avg Turnaround" value={`${avgTurnaround}h`} icon="timer" color="blue" sublabel="ordered → completed" />
         <StatTile label="Most Ordered Test" value={mostOrdered} icon="flask" color="amber" sublabel="by request volume" />
       </div>
@@ -654,7 +472,7 @@ function LabSubTab({ range, exportCsv }) {
         <Card className="lg:col-span-2 overflow-hidden">
           <CardHeader
             title="Lab Requests Per Day"
-            subtitle="last 7 days"
+            subtitle={range.label}
             action={
               <button
                 onClick={() => exportCsv('lab-requests-daily', chartData.map((d) => ({ Day: d.day, Requests: d.requests })))}
@@ -749,24 +567,21 @@ function LabSubTab({ range, exportCsv }) {
   )
 }
 
-// ─── Sub-tab 4: Pharmacy ─────────────────────────────────────────
+// ─── Sub-tab 3: Pharmacy ─────────────────────────────────────────
+// Now a single query — the backend consolidates dispensing, OTC sales,
+// and expenses into one range-filtered response instead of three calls.
 function PharmacySubTab({ range, exportCsv }) {
   const q = useQuery({
-    queryKey: ['admin', 'reports', 'pharmacy'],
-    queryFn: () => api.get('/api/pharmacy/queue'),
-    staleTime: 30000,
-  })
-  const expQ = useQuery({
-    queryKey: ['admin', 'reports', 'pharmacy-expenses'],
-    queryFn: () => api.get('/api/expenses?department=pharmacy'),
+    queryKey: ['admin', 'reports', 'pharmacy', range.apiRange, range.startISO, range.endISO],
+    queryFn: () => api.get(`/api/admin/reports/pharmacy?${buildRangeQuery(range)}`),
     staleTime: 30000,
   })
 
-  if (q.isLoading || expQ.isLoading) {
+  if (q.isLoading) {
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
         </div>
         <SkeletonTable rows={4} cols={3} />
       </div>
@@ -774,42 +589,51 @@ function PharmacySubTab({ range, exportCsv }) {
   }
   if (q.isError) return <ErrorState message={q.error?.message || 'Could not load pharmacy data'} onRetry={q.refetch} />
 
-  const dispensedToday = Number(q.data?.dispensed_today) || 0
+  const stats = q.data?.stats || {}
   const byDay = Array.isArray(q.data?.by_day) ? q.data.by_day : []
   const topDrugs = Array.isArray(q.data?.top_drugs) ? q.data.top_drugs : []
-  const expStats = expQ.data?.stats || {}
-  const expenses = Number(expStats.total) || 0
+
+  const dispensedTotal = Number(stats.dispensed_total) || 0
+  const otcTotal = Number(stats.otc_total) || 0
+  const expenses = Number(stats.expenses_total) || 0
   const topDrug = topDrugs[0]?.name || '—'
 
-  const chartData = byDay.map((d) => ({ day: d.day, dispensed: d.count }))
+  const chartData = byDay.map((d) => ({ day: d.day, dispensed: d.dispensed, otc: d.otc }))
   const exportRows = topDrugs.map((d) => ({ Drug: d.name, QuantityDispensed: d.count }))
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatTile label="Prescriptions Dispensed" value={dispensedToday} icon="checkCircle" color="green" sublabel="today" />
-        <StatTile label="Expenses" value={formatMoney(expenses)} icon="trendDown" color="red" sublabel="pharmacy ops (all-time)" />
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+        <StatTile label="Prescriptions Dispensed" value={dispensedTotal} icon="checkCircle" color="green" sublabel="in selected range" />
+        <StatTile label="OTC Sales" value={otcTotal} icon="store" color="amber" sublabel="in selected range" />
+        <StatTile label="Expenses" value={formatMoney(expenses)} icon="trendDown" color="red" sublabel="pharmacy ops, in selected range" />
         <StatTile label="Top Drug" value={topDrug} icon="pill" color="cyan" sublabel="by dispensed quantity" />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        {/* BarChart: dispensing per day */}
+        {/* BarChart: dispensing + OTC per day (two colored bars) */}
         <Card className="lg:col-span-2 overflow-hidden">
           <CardHeader
-            title="Dispensing Per Day"
-            subtitle="last 7 days"
+            title="Dispensing & OTC Sales Per Day"
+            subtitle={range.label}
             action={
-              <button
-                onClick={() => exportCsv('pharmacy-dispensing-daily', chartData.map((d) => ({ Day: d.day, Dispensed: d.dispensed })))}
-                className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 flex items-center gap-1.5"
-              >
-                <Icon name="download" size={12} /> CSV
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-3 text-[10px]">
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-cyan-500" /> Dispensed</span>
+                  <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500" /> OTC Sales</span>
+                </div>
+                <button
+                  onClick={() => exportCsv('pharmacy-daily', chartData.map((d) => ({ Day: d.day, Dispensed: d.dispensed, OTCSales: d.otc })))}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 flex items-center gap-1.5"
+                >
+                  <Icon name="download" size={12} /> CSV
+                </button>
+              </div>
             }
           />
           <div className="p-4">
             {chartData.length === 0 ? (
-              <EmptyState icon="barChart" title="No dispensing data" description="Dispensing will appear here once prescriptions are filled." />
+              <EmptyState icon="barChart" title="No pharmacy data" description="Dispensing and OTC sales will appear here once activity is recorded." />
             ) : (
               <ResponsiveContainer width="100%" height={260}>
                 <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -835,7 +659,14 @@ function PharmacySubTab({ range, exportCsv }) {
                     name="Dispensed"
                     fill="#06b6d4"
                     radius={[6, 6, 0, 0]}
-                    maxBarSize={48}
+                    maxBarSize={36}
+                  />
+                  <Bar
+                    dataKey="otc"
+                    name="OTC Sales"
+                    fill="#f59e0b"
+                    radius={[6, 6, 0, 0]}
+                    maxBarSize={36}
                   />
                 </BarChart>
               </ResponsiveContainer>
@@ -889,148 +720,5 @@ function PharmacySubTab({ range, exportCsv }) {
         </Card>
       </div>
     </div>
-  )
-}
-
-// ─── Sub-tab 5: Staff ────────────────────────────────────────────
-function StaffSubTab({ range, exportCsv }) {
-  const q = useQuery({
-    queryKey: ['admin', 'reports', 'staff'],
-    queryFn: () => api.get('/api/admin/staff'),
-    staleTime: 30000,
-  })
-  const [sortKey, setSortKey] = useState('visits_handled')
-  const [sortDir, setSortDir] = useState('desc')
-
-  const toggleSort = (key) => {
-    if (sortKey === key) {
-      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortKey(key)
-      setSortDir('desc')
-    }
-  }
-
-  if (q.isLoading) {
-    return (
-      <div className="space-y-4">
-        <SkeletonTable rows={7} cols={6} />
-      </div>
-    )
-  }
-  if (q.isError) return <ErrorState message={q.error?.message || 'Could not load staff'} onRetry={q.refetch} />
-
-  const allStaff = Array.isArray(q.data?.staff) ? q.data.staff : []
-  const staff = allStaff
-    .filter((s) => s.is_active)
-    .map((s) => ({
-      ...s,
-      visits_handled: Number(s.visits_handled) || 0,
-      prescriptions_written: Number(s.prescriptions_written) || 0,
-      lab_orders_placed: Number(s.lab_orders_placed) || 0,
-    }))
-    .sort((a, b) => {
-      const av = a[sortKey]
-      const bv = b[sortKey]
-      if (typeof av === 'string' && typeof bv === 'string') {
-        return sortDir === 'asc' ? av.localeCompare(bv) : bv.localeCompare(av)
-      }
-      return sortDir === 'asc' ? av - bv : bv - av
-    })
-
-  const exportRows = staff.map((s) => ({
-    Name: s.name,
-    Role: ROLE_LABELS[s.role] || cap(s.role),
-    Username: s.username,
-    VisitsHandled: s.visits_handled,
-    PrescriptionsWritten: s.prescriptions_written,
-    LabOrdersPlaced: s.lab_orders_placed,
-  }))
-
-  return (
-    <div className="space-y-4">
-      <Card className="overflow-hidden">
-        <CardHeader
-          title="Staff Productivity"
-          subtitle={`${staff.length} active staff · sorted by ${sortKey.replace(/_/g, ' ')} (${sortDir})`}
-          action={
-            <button
-              onClick={() => exportCsv('staff-productivity', exportRows)}
-              className="px-2.5 py-1 rounded-md text-[11px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 flex items-center gap-1.5"
-            >
-              <Icon name="download" size={12} /> CSV
-            </button>
-          }
-        />
-        {staff.length === 0 ? (
-          <EmptyState icon="users" title="No active staff" description="" />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
-                  <StaffSortHeader label="Staff" sortKey="name" align="left" active={sortKey} dir={sortDir} onToggle={toggleSort} />
-                  <Th align="left">Role</Th>
-                  <StaffSortHeader label="Visits" sortKey="visits_handled" active={sortKey} dir={sortDir} onToggle={toggleSort} />
-                  <StaffSortHeader label="Prescriptions" sortKey="prescriptions_written" active={sortKey} dir={sortDir} onToggle={toggleSort} />
-                  <StaffSortHeader label="Lab Orders" sortKey="lab_orders_placed" active={sortKey} dir={sortDir} onToggle={toggleSort} />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
-                {staff.map((s) => (
-                  <tr key={s.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-full bg-[#1a6cbf]/10 text-[#1a6cbf] dark:text-blue-400 text-[12px] font-bold flex items-center justify-center shrink-0">
-                          {s.name.split(' ').map((w) => w[0]).slice(0, 2).join('').toUpperCase()}
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">{s.name}</p>
-                          <p className="text-[11px] text-gray-400">@{s.username}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <Badge className={ROLE_BADGES[s.role] || 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400'}>
-                        {ROLE_LABELS[s.role] || cap(s.role)}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{s.visits_handled}</td>
-                    <td className="px-4 py-3 text-right text-[13px] text-gray-700 dark:text-gray-300 tabular-nums">{s.prescriptions_written}</td>
-                    <td className="px-4 py-3 text-right text-[13px] text-gray-700 dark:text-gray-300 tabular-nums">{s.lab_orders_placed}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-    </div>
-  )
-}
-
-// Sortable header cell for the staff productivity table.
-// Declared at module scope (NOT inside StaffSubTab render) so it
-// doesn't reset its own state and stays compatible with the
-// react-hooks/static-components lint rule.
-function StaffSortHeader({ label, sortKey: k, align = 'right', active, dir, onToggle }) {
-  const isActive = active === k
-  return (
-    <Th align={align}>
-      <button
-        onClick={() => onToggle(k)}
-        className="inline-flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
-      >
-        {label}
-        <Icon
-          name="chevronDown"
-          size={11}
-          className={[
-            'transition-transform',
-            isActive ? (dir === 'asc' ? 'rotate-180' : '') : 'opacity-30',
-          ].join(' ')}
-        />
-      </button>
-    </Th>
   )
 }
