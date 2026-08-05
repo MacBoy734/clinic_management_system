@@ -1,17 +1,24 @@
 'use client'
 
-// ConsultationTab — unified clinical workspace with integrated observation/admission
-// No separate admissions page. Observation is a mode of the consultation visit.
+// ConsultationTab — the doctor's consultation room (merged page)
+// APIs:
+//   GET   /api/doctor/visits/[id]                        → { locked, visit }
+//   PATCH /api/doctor/visits/[id]                        → vitals, soap, diagnosis, status, from_pharmacy
+//   GET   /api/doctor/lab-catalog                        → active lab tests for the order modal
+//   GET   /api/doctor/visits/[id]/labs                   → lab orders (items carry result_data + result_template)
+//   POST  /api/doctor/visits/[id]/labs                   → { test_ids:[id], urgency }
+//   GET   /api/doctor/visits/[id]/prescriptions          → prescriptions for visit
+//   POST  /api/doctor/visits/[id]/prescriptions          → { items:[{medication,dosage,frequency,duration,quantity,unit_cost,form,drug_id}] }
+//   PATCH /api/doctor/prescriptions/[id]/return-item     → { item_id, doctor_name, reason } (issued items only)
+//   GET   /api/procedures                                → { procedures, familyPlanningMethods }
+//   PATCH /api/doctor/visits/[id]/complete-procedure     → { procedure_type, procedure_id, notes, doctor_name, price }
+//   GET   /api/pharmacy/drugs                            → drug stock for the prescription search
 //
-// FLOW:
-//   1. Normal visit → doctor sees [Start Observation] + [End Consultation]
-//   2. Doctor clicks Start Observation → admission created, banner appears
-//   3. Doctor continues clinical work (same page, same forms)
-//   4. Doctor clicks Discharge → admission.status = 'discharged'
-//   5. Doctor clicks End Consultation → visit.status = 'billing'
-//
-// MOCK DATA: toggle MOCK_MODE = true to preview without endpoints.
-// Remove MOCK_MODE and the mockData object once APIs are ready.
+// CONTROLLED-INPUT POLICY: every controlled input's `value` must stay defined
+// for the life of the component. Any value sourced from an API response gets a
+// `?? ''` / `?? 0` guard either at the write site or on the prop — one missing
+// field in a payload must never flip an input to uncontrolled (React warning:
+// "A component is changing a controlled input to be uncontrolled").
 
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
@@ -20,207 +27,46 @@ import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, InlineLoader, Spinner, Icon,
-  formatMoney, formatTime, formatDate, formatDateTime, timeAgo, badgeClass, cap,
+  formatMoney, formatTime, formatDate, timeAgo, badgeClass, cap, VISIT_TYPES,
 } from '@/utils/helpers'
+import { useSearchParams } from 'next/navigation'
+import { evaluateField } from '@/utils/labResult'
+import {
+  SUBJECTIVE_SUGGESTIONS, OBJECTIVE_SUGGESTIONS,
+  ASSESSMENT_SUGGESTIONS, PLAN_SUGGESTIONS,
+} from '@/lib/enums'
+import socket from '@/lib/socket'
 import { DIAGNOSIS_CATALOG, DIAGNOSIS_CATEGORIES } from '@/lib/diagnosis_catalog'
+import { MedicalReportModal } from '@/components/doctor/MedicalReportModal'
 
-// ═════════════════════════════════════════════════════════════════════════════
-// MOCK DATA — remove this entire block once endpoints exist
-// ═════════════════════════════════════════════════════════════════════════════
-
-const MOCK_MODE = true
-
-const MOCK_VISIT = {
-  id: 4821,
-  patient_name: 'John Doe',
-  patient_age: 35,
-  patient_gender: 'male',
-  blood_group: 'O+',
-  allergies: 'Penicillin, Sulfa',
-  chief_complaint: 'Severe abdominal pain and vomiting since last night',
-  status: 'with_doctor',
-  visit_type: 'consultation',
-  arrived_at: '2026-07-31T10:00:00+03:00',
-  from_pharmacy: false,
-
-  // Latest vitals (synced into form on load)
-  temperature: 37.8,
-  bp_systolic: 128,
-  bp_diastolic: 82,
-  pulse: 88,
-  respiratory_rate: 18,
-  weight: 72,
-  height: 175,
-  spo2: 97,
-  vitals_notes: 'Patient in mild distress, guarding abdomen on palpation',
-
-  // SOAP
-  subjective: 'Patient reports sharp abdominal pain starting last night after dinner. Associated with 3 episodes of vomiting. No fever reported initially.',
-  objective: 'Alert, oriented. Abdomen tender in RLQ. Bowel sounds present. No rebound tenderness noted. Temp 37.8°C.',
-  assessment: 'Acute appendicitis vs gastroenteritis. Awaiting FBC and urinalysis results.',
-  plan: 'NPO status, IV fluids, analgesia. Surgical review if WBC elevated. Admit for observation.',
-
-  // Diagnosis
-  diagnosis: 'Acute Appendicitis',
-  diagnosis_code: 'K35',
-
-  // Bill preview (computed from fees)
-  consultation_fee: 500,
-  lab_fee: 1300,
-  medication_fee: 850,
-  procedure_fee: 0,
-  bill_total: 2650,
-
-  // ═══ ADMISSION / OBSERVATION ═══
-  // Toggle this object to see different states:
-  //   null                = normal visit (no observation)
-  //   status: 'admitted'  = currently under observation
-  //   status: 'discharged'= observation ended, ready for billing
-  admission: {
-    id: 101,
-    status: 'admitted', // <-- try 'admitted' | 'discharged' | test with null
-    admission_type: 'observation',
-    reason: 'Post-procedure monitoring and pain management',
-    deposit: 1000,
-    expected_discharge: '2026-07-31T18:00:00+03:00',
-    admitted_at: '2026-07-31T12:30:00+03:00',
-    discharged_at: null,
-    days_admitted: null,
-    discharge_notes: null,
-  },
-
-  // Vitals history (for display only)
-  vitals_history: [
-    { id: 1, recorded_at: '2026-07-31T12:30:00+03:00', temperature: 37.8, bp_systolic: 128, bp_diastolic: 82, pulse: 88, respiratory_rate: 18, spo2: 97, weight: 72, recorded_by: 'Dr. Kimani' },
-    { id: 2, recorded_at: '2026-07-31T14:00:00+03:00', temperature: 37.4, bp_systolic: 124, bp_diastolic: 78, pulse: 82, respiratory_rate: 16, spo2: 98, weight: null, recorded_by: 'Dr. Kimani' },
-  ],
-
-  // Lab requests
-  lab_requests: [
-    {
-      id: 201,
-      urgency: 'urgent',
-      ordered_by: 'Dr. Kimani',
-      ordered_at: '2026-07-31T12:45:00+03:00',
-      status: 'ready',
-      items: [
-        { id: 301, test_name: 'Full Blood Count', category: 'hematology', status: 'ready', result: 'WBC 12.4, Hb 14.2, Plt 280', flagged: true, reference_range: 'WBC 4-11 x10⁹/L', completed_at: '2026-07-31T13:30:00+03:00', result_notes: 'Leukocytosis — correlate clinically' },
-        { id: 302, test_name: 'Urinalysis', category: 'urinalysis', status: 'ready', result: 'Normal', flagged: false, reference_range: 'Negative', completed_at: '2026-07-31T13:45:00+03:00' },
-      ]
-    }
-  ],
-
-  // Prescriptions
-  prescriptions: [
-    {
-      id: 401,
-      prescribed_at: '2026-07-31T13:00:00+03:00',
-      prescribed_by: 'Dr. Kimani',
-      status: 'pending',
-      items: [
-        { id: 501, medication: 'Paracetamol', dosage: '1g', frequency: 'TID', duration: '3 days', quantity: 9, unit_cost: 15, form: 'tablet', status: 'pending' },
-        { id: 502, medication: 'Ceftriaxone', dosage: '1g', frequency: 'BD', duration: '2 days', quantity: 4, unit_cost: 500, form: 'injection', status: 'pending' },
-        { id: 503, medication: 'Metronidazole', dosage: '400mg', frequency: 'TID', duration: '3 days', quantity: 9, unit_cost: 12, form: 'tablet', status: 'pending' },
-      ]
-    }
-  ],
-
-  // Procedure / service
-  procedure_name: null,
-  procedure_type: null,
-  procedure_notes: null,
-  procedure_done_by: null,
-  procedure_fee: 0,
-}
-
-const mockDelay = (ms = 600) => new Promise((r) => setTimeout(r, ms))
-
-// ═════════════════════════════════════════════════════════════════════════════
-// END MOCK DATA
-// ═════════════════════════════════════════════════════════════════════════════
-
-// ─── Shared constants ───────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
 const inputCls =
   'w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]'
 
 const EMPTY_VITALS = {
-  temperature: '', bp_systolic: '', bp_diastolic: '', pulse: '',
-  respiratory_rate: '', weight: '', height: '', spo2: '', vitals_notes: '',
+  temperature: '',
+  bp_systolic: '',
+  bp_diastolic: '',
+  pulse: '',
+  respiratory_rate: '',
+  weight: '',
+  height: '',
+  spo2: '',
+  vitals_notes: '',
 }
 
 const EMPTY_SOAP = { subjective: '', objective: '', assessment: '', plan: '' }
 
-const ADMISSION_TYPES = [
-  { value: 'emergency', label: 'Emergency' },
-  { value: 'elective', label: 'Elective' },
-  { value: 'transfer', label: 'Transfer' },
-  { value: 'observation', label: 'Observation' },
+const URGENCY_OPTIONS = [
+  { value: 'routine', label: 'Routine', badge: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400' },
+  { value: 'urgent', label: 'Urgent', badge: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+  { value: 'stat', label: 'STAT', badge: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
 ]
 
-// ─── Medication schedule helper (pure frontend, read-only) ──────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const FREQUENCY_SLOTS = {
-  OD: ['08:00'],
-  BD: ['08:00', '20:00'],
-  TID: ['08:00', '14:00', '20:00'],
-  QID: ['08:00', '12:00', '16:00', '20:00'],
-  STAT: ['Once — immediately'],
-  PRN: ['As needed'],
-  Q12H: ['08:00', '20:00'],
-  Q8H: ['06:00', '14:00', '22:00'],
-  Q6H: ['06:00', '12:00', '18:00', '00:00'],
-  Q4H: ['06:00', '10:00', '14:00', '18:00', '22:00', '02:00'],
-}
-
-function parseDuration(durationStr) {
-  if (!durationStr) return 1
-  const match = String(durationStr).match(/(\d+)/)
-  return match ? parseInt(match[1]) : 1
-}
-
-function MedicationSchedule({ frequency, duration, prescribedAt }) {
-  const slots = FREQUENCY_SLOTS[frequency?.toUpperCase()] || null
-  const days = parseDuration(duration)
-  const start = prescribedAt ? new Date(prescribedAt) : new Date()
-
-  if (!slots || slots.length === 0) {
-    return <p className="text-[10px] text-gray-400 italic mt-1">No schedule for &quot;{frequency}&quot;</p>
-  }
-
-  const dayLabels = []
-  for (let d = 0; d < days; d++) {
-    const date = new Date(start)
-    date.setDate(date.getDate() + d)
-    const label = d === 0 ? 'Today' : d === 1 ? 'Tomorrow' : formatDate(date)
-    dayLabels.push(label)
-  }
-
-  return (
-    <div className="mt-2 rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/40 p-2.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
-        Schedule · {frequency} · {days} day{days > 1 ? 's' : ''}
-      </p>
-      <div className="space-y-1">
-        {dayLabels.map((label, di) => (
-          <div key={di} className="flex items-center gap-2">
-            <span className="text-[10px] font-semibold text-gray-500 dark:text-gray-400 w-14 shrink-0">{label}</span>
-            <div className="flex items-center gap-1 flex-wrap">
-              {slots.map((slot, si) => (
-                <span key={si} className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300">
-                  {slot}
-                </span>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ─── Vital status helper ────────────────────────────────────────────────────
-
+// Returns 'normal' | 'abnormal' | null for a vital sign
 function vitalStatus(key, value) {
   if (value === '' || value == null) return null
   const v = parseFloat(value)
@@ -236,66 +82,63 @@ function vitalStatus(key, value) {
   }
 }
 
-// ─── Main Component ─────────────────────────────────────────────────────────
+// ─── Main component ───────────────────────────────────────────────────────────
 
 export default function ConsultationTab() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
-  const [visitId] = useState(MOCK_MODE ? String(MOCK_VISIT.id) : null)
-
-  // Form states
   const [vitals, setVitals] = useState(EMPTY_VITALS)
   const [soap, setSoap] = useState(EMPTY_SOAP)
   const [diagnosis, setDiagnosis] = useState('')
   const [diagnosisCode, setDiagnosisCode] = useState('')
   const [openSoap, setOpenSoap] = useState({ subjective: true, objective: false, assessment: false, plan: false })
-
-  // Modal states
   const [showLabModal, setShowLabModal] = useState(false)
   const [showRxModal, setShowRxModal] = useState(false)
   const [showReportModal, setShowReportModal] = useState(false)
   const [showProcedureModal, setShowProcedureModal] = useState(false)
-  const [showStartObsModal, setShowStartObsModal] = useState(false)
-  const [showDischargeModal, setShowDischargeModal] = useState(false)
+  const searchParams = useSearchParams()
+  const visitId = searchParams.get('visitId')
 
-  // ── Data fetching ─────────────────────────────────────────────────────────
-
+  // API: GET /api/doctor/visits/[id]
   const visitQuery = useQuery({
     queryKey: ['doctor', 'visit', visitId],
-    queryFn: async () => {
-      if (MOCK_MODE) { await mockDelay(400); return { locked: false, visit: MOCK_VISIT } }
-      return api.get(`/api/doctor/visits/${visitId}`)
-    },
+    queryFn: () => api.get(`/api/doctor/visits/${visitId}`),
     enabled: !!visitId,
     refetchInterval: 30000,
     staleTime: 15000,
   })
 
+  const locked = visitQuery.data?.locked === true
+
+  // API: GET /api/doctor/visits/[id]/labs
   const labsQuery = useQuery({
     queryKey: ['doctor', 'visit', visitId, 'labs'],
-    queryFn: async () => {
-      if (MOCK_MODE) { await mockDelay(300); return { requests: MOCK_VISIT.lab_requests } }
-      return api.get(`/api/doctor/visits/${visitId}/labs`)
-    },
-    enabled: !!visitId,
+    queryFn: () => api.get(`/api/doctor/visits/${visitId}/labs`),
+    enabled: !!visitId && !locked,
+    refetchInterval: 30000,
+    staleTime: 15000,
   })
 
+  // API: GET /api/doctor/visits/[id]/prescriptions
   const rxQuery = useQuery({
     queryKey: ['doctor', 'visit', visitId, 'prescriptions'],
-    queryFn: async () => {
-      if (MOCK_MODE) { await mockDelay(300); return { prescriptions: MOCK_VISIT.prescriptions } }
-      return api.get(`/api/doctor/visits/${visitId}/prescriptions`)
-    },
-    enabled: !!visitId,
+    queryFn: () => api.get(`/api/doctor/visits/${visitId}/prescriptions`),
+    enabled: !!visitId && !locked,
+    refetchInterval: 30000,
+    staleTime: 15000,
   })
 
   const visit = visitQuery.data?.visit
-  const locked = visitQuery.data?.locked === true
   const labRequests = labsQuery.data?.requests || []
   const prescriptions = rxQuery.data?.prescriptions || []
-  const admission = visit?.admission || null
 
-  // Sync form state
+  // Diagnosis gate: cannot save diagnosis while lab tests are still pending.
+  const labsBlockingDiagnosis = labRequests.length > 0 && labRequests.some((r) =>
+    r.items.some((it) => it.status === 'pending' || it.status === 'in_progress')
+  )
+
+  // Sync form state when the visit loads.
+  // Hooks stay ABOVE the locked early-return; the effect itself no-ops when locked.
   useEffect(() => {
     if (!visit || locked) return
     setVitals({
@@ -319,188 +162,683 @@ export default function ConsultationTab() {
     setDiagnosisCode(visit.diagnosis_code ?? '')
   }, [visit?.id, locked])
 
-  // ── Mutations ─────────────────────────────────────────────────────────────
+  // ── Websockets ──────────────────────────────────────────────────────────────
+useEffect(() => {
+  if (!visitId) return
 
+  const handleDispensed = () => {
+    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
+  }
+
+  const handleCancelled = () => {
+    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
+  }
+  const handleLabrequests = () => {
+    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+  }
+
+  socket.on('rx:dispensed', handleDispensed)
+  socket.on('rx:cancelled', handleCancelled)
+  socket.on('lab:results_ready', handleLabrequests)
+
+  return () => {
+    socket.off('rx:dispensed', handleDispensed)
+    socket.off('rx:cancelled', handleCancelled)
+    socket.off('lab:results_ready', handleLabrequests)
+  }
+}, [visitId, queryClient])
+
+  // API: PATCH /api/doctor/visits/[id]
   const patchMutation = useMutation({
-    mutationFn: async (body) => {
-      if (MOCK_MODE) { await mockDelay(500); Object.assign(MOCK_VISIT, body); return { visit: MOCK_VISIT } }
-      return api.patch(`/api/doctor/visits/${visitId}`, body)
+    mutationFn: (body) => api.patch(`/api/doctor/visits/${visitId}`, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor'] })
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] }),
   })
 
-  const startObsMutation = useMutation({
-    mutationFn: async (body) => {
-      if (MOCK_MODE) {
-        await mockDelay(600)
-        MOCK_VISIT.admission = {
-          id: 999, status: 'admitted', admission_type: body.admission_type || 'observation',
-          reason: body.reason, deposit: Number(body.deposit) || 0,
-          expected_discharge: body.expected_discharge || null,
-          admitted_at: new Date().toISOString(), discharged_at: null, days_admitted: null, discharge_notes: null,
-        }
-        return { admission: MOCK_VISIT.admission }
-      }
-      return api.post('/api/admissions', { ...body, visit_id: Number(visitId) })
-    },
-    onSuccess: () => { toast.success('Observation started'); setShowStartObsModal(false); queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] }) },
-    onError: (e) => toast.error(e.message || 'Could not start observation'),
-  })
-
-  const dischargeMutation = useMutation({
-    mutationFn: async (body) => {
-      if (MOCK_MODE) {
-        await mockDelay(600)
-        const adm = MOCK_VISIT.admission
-        adm.status = 'discharged'
-        adm.discharged_at = new Date().toISOString()
-        adm.days_admitted = 1
-        adm.discharge_notes = body.discharge_notes || ''
-        MOCK_VISIT.procedure_fee = (MOCK_VISIT.procedure_fee || 0) + 500
-        MOCK_VISIT.bill_total = (MOCK_VISIT.bill_total || 0) + 500
-        return { admission: adm }
-      }
-      return api.patch(`/api/admissions/${admission.id}/discharge`, body)
-    },
-    onSuccess: () => { toast.success('Patient discharged'); setShowDischargeModal(false); queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] }) },
-    onError: (e) => toast.error(e.message || 'Could not discharge'),
-  })
-
+  // API: POST /api/doctor/visits/[id]/labs
   const labMutation = useMutation({
-    mutationFn: (body) => MOCK_MODE ? mockDelay(400).then(() => ({ ok: true })) : api.post(`/api/doctor/visits/${visitId}/labs`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] }),
+    mutationFn: (body) => api.post(`/api/doctor/visits/${visitId}/labs`, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    },
   })
 
+  // API: POST /api/doctor/visits/[id]/prescriptions
   const rxMutation = useMutation({
-    mutationFn: (body) => MOCK_MODE ? mockDelay(400).then(() => ({ ok: true })) : api.post(`/api/doctor/visits/${visitId}/prescriptions`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] }),
+    mutationFn: (body) => api.post(`/api/doctor/visits/${visitId}/prescriptions`, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    },
   })
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // API: PATCH /api/doctor/visits/[id]/complete-procedure
+  const procedureMutation = useMutation({
+    mutationFn: (body) => api.patch(`/api/doctor/visits/${visitId}/complete-procedure`, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    },
+  })
+
+  // ─── Save handlers ──────────────────────────────────────────────────────────
 
   const handleSaveVitals = async () => {
-    try { await patchMutation.mutateAsync({ ...vitals }); toast.success('Vitals saved') }
-    catch (err) { toast.error(err.message || 'Could not save vitals') }
+    try {
+      await patchMutation.mutateAsync({ ...vitals })
+      toast.success('Vitals saved')
+    } catch (err) {
+      toast.error(err.message || 'Could not save vitals')
+    }
   }
 
   const handleSaveSoap = async () => {
-    try { await patchMutation.mutateAsync({ ...soap }); toast.success('SOAP notes saved') }
-    catch (err) { toast.error(err.message || 'Could not save notes') }
+    try {
+      await patchMutation.mutateAsync({ ...soap })
+      toast.success('SOAP notes saved')
+    } catch (err) {
+      toast.error(err.message || 'Could not save notes')
+    }
   }
 
   const handleSaveDiagnosis = async () => {
-    try { await patchMutation.mutateAsync({ diagnosis, diagnosis_code: diagnosisCode }); toast.success('Diagnosis saved') }
-    catch (err) { toast.error(err.message || 'Could not save diagnosis') }
+    if (labsBlockingDiagnosis) {
+      toast.error('Diagnosis cannot be saved until all lab results are ready. Please wait for the lab to complete the tests.')
+      return
+    }
+    try {
+      await patchMutation.mutateAsync({ diagnosis, diagnosis_code: diagnosisCode })
+      toast.success('Diagnosis saved')
+    } catch (err) {
+      toast.error(err.message || 'Could not save diagnosis')
+    }
   }
 
+  // End Consultation ALWAYS sends to billing. The button is disabled while
+  // labs or medications are pending, so by the time the doctor can click it,
+  // everything is resolved. from_pharmacy:false clears the review banner.
   const handleEndConsultation = async () => {
-    if (endBlockReason) { toast.error(endBlockReason); return }
+    if (endBlockReason) {
+      toast.error(endBlockReason)
+      return
+    }
     try {
       await patchMutation.mutateAsync({ status: 'billing', from_pharmacy: false, diagnosis, diagnosis_code: diagnosisCode, ...soap })
-      toast.success('Consultation ended — sent to billing')
-    } catch (err) { toast.error(err.message || 'Could not end consultation') }
+      toast.success('Consultation completed — patient sent to billing')
+    } catch (err) {
+      toast.error(err.message || 'Could not end consultation')
+    }
   }
 
-  // ── Derived state ─────────────────────────────────────────────────────────
-
-  const pendingLabsCount = labRequests.reduce((n, r) => n + r.items.filter((it) => it.status === 'pending' || it.status === 'in_progress').length, 0)
-  const pendingRxCount = prescriptions.reduce((n, p) => n + p.items.filter((it) => it.status === 'pending').length, 0)
-  const readyLabsCount = labRequests.reduce((n, r) => { if (r.status !== 'ready') return n; return n + r.items.filter((it) => it.status === 'ready' && it.result).length }, 0)
-  const hasReadyLabs = readyLabsCount > 0
-  const isAdmitted = admission?.status === 'admitted'
-  const isDischarged = admission?.status === 'discharged'
-
-  let endBlockReason = null
-  if (isAdmitted && !isDischarged) {
-    endBlockReason = 'Patient is under observation. Discharge before ending consultation.'
-  } else if (pendingLabsCount > 0) {
-    endBlockReason = `${pendingLabsCount} lab test${pendingLabsCount > 1 ? 's are' : ' is'} still pending.`
-  } else if (pendingRxCount > 0) {
-    endBlockReason = `${pendingRxCount} medication${pendingRxCount > 1 ? 's are' : ' is'} pending at pharmacy.`
+  const handleAddProcedure = async (procedureType, procedureId, notes, price) => {
+    try {
+      const result = await procedureMutation.mutateAsync({
+        procedure_type: procedureType,
+        procedure_id: procedureId,
+        notes,
+        doctor_name: user?.username || 'Doctor',
+        price,
+      })
+      toast.success(result.message || 'Procedure added to bill')
+      setShowProcedureModal(false)
+    } catch (err) {
+      toast.error(err.message || 'Could not add procedure')
+    }
   }
 
-  const reportHasContent = !!(visit?.diagnosis?.trim() || visit?.subjective || readyLabsCount > 0 || prescriptions.some((p) => (p.items || []).length > 0))
+  const handleOrderLabs = async (testIds, urgency) => {
+    if (!testIds.length) {
+      toast.error('Select at least one test')
+      return
+    }
+    try {
+      await labMutation.mutateAsync({ test_ids: testIds, urgency })
+      toast.success(`${testIds.length} lab test${testIds.length > 1 ? 's' : ''} ordered`)
+      setShowLabModal(false)
+    } catch (err) {
+      toast.error(err.message || 'Could not order lab tests')
+    }
+  }
 
-  // ── Render guards ─────────────────────────────────────────────────────────
+  const handleAddPrescription = async (items) => {
+    if (!items.length) {
+      toast.error('Add at least one medication')
+      return
+    }
+    try {
+      await rxMutation.mutateAsync({ items })
+      toast.success('Prescription sent to pharmacy')
+      setShowRxModal(false)
+    } catch (err) {
+      toast.error(err.message || 'Could not add prescription')
+    }
+  }
 
-  if (!visitId) return <EmptyState icon="stethoscope" title="No patient selected" description="Pick a patient from the queue." />
+  // ─── Render ─────────────────────────────────────────────────────────────────
+
+  if (!visitId) {
+    return (
+      <EmptyState
+        icon="stethoscope"
+        title="No patient selected"
+        description="Pick a patient from the queue to start a consultation. Their full chart will appear here."
+      />
+    )
+  }
+
   if (visitQuery.isLoading) return <InlineLoader label="Loading patient chart…" />
   if (visitQuery.error) return <ErrorState message={visitQuery.error.message} onRetry={visitQuery.refetch} />
-  if (!visit) return <EmptyState icon="alert" title="Visit not found" />
-  if (locked) return <LockedState visit={visit} />
+  if (!visit) return <EmptyState icon="alert" title="Visit not found" description="This visit may have been archived." />
 
-  // ── Main Render ───────────────────────────────────────────────────────────
+  // Stage lock: the patient has moved past the doctor's part of the flow
+  // (billing, done, archived) or hasn't paid yet. Do not open the chart.
+  if (locked) {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] p-10 text-center">
+          <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 flex items-center justify-center mx-auto mb-3">
+            <Icon name="lock" size={22} />
+          </div>
+          <h2 className="text-[15px] font-semibold text-gray-900 dark:text-gray-100">
+            Patient is no longer in consultation
+          </h2>
+          <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1 max-w-md mx-auto">
+            {visit.patient_name ? `${visit.patient_name} has ` : 'This patient has '}
+            moved to <span className="font-semibold">{cap(visit.status)}</span> and can no longer be
+            managed from the consultation room.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const visitType = VISIT_TYPES[visit.visit_type] || { label: cap(visit.visit_type), badge: badgeClass(visit.visit_type) }
+  const pendingLabsCount = labRequests.reduce((n, r) => n + r.items.filter((it) => it.status === 'pending' || it.status === 'in_progress').length, 0)
+  const pendingRxCount = prescriptions.reduce((n, p) => n + p.items.filter((it) => it.status === 'pending').length, 0)
+  const readyLabsCount = labRequests.reduce((n, r) => {
+    if (r.status !== 'ready') return n
+    return n + r.items.filter((it) => it.status === 'ready' && (it.result || it.result_data)).length
+  }, 0)
+  const hasReadyLabs = readyLabsCount > 0
+  const patientForEval = { gender: visit.patient_gender, age: visit.patient_age }
+
+  // Returned meds still awaiting the pharmacist's restock confirmation are
+  // open pharmacy work — the visit cannot leave the doctor stage under them.
+  const returnedAwaitingCount = prescriptions.reduce(
+    (n, p) => n + p.items.filter((it) => it.status === 'returned').length, 0
+  )
+
+  // Empty-bill gate: the visit must carry at least one billable item before
+  // it can be sent to the billing desk. Consultation visits always pass
+  // (stage-1 fee); injection / family-planning visits have NO consultation
+  // fee, so this blocks ending until a procedure/service has been added.
+  const billTotal = visit.bill_total ??
+    ((visit.consultation_fee ?? 0) + (visit.lab_fee ?? 0) + (visit.medication_fee ?? 0) + (visit.procedure_fee ?? 0))
+  const noBill = billTotal <= 0
+
+  // Single source of truth for why End Consultation is blocked (null = allowed)
+  const endBlockReason =
+    pendingLabsCount > 0
+      ? `Cannot end — ${pendingLabsCount} lab test${pendingLabsCount > 1 ? 's are' : ' is'} still pending. Patient is at the lab.`
+      : pendingRxCount > 0
+        ? `Cannot end — ${pendingRxCount} medication${pendingRxCount > 1 ? 's are' : ' is'} pending at the pharmacy.`
+        : returnedAwaitingCount > 0
+          ? `Cannot end — ${returnedAwaitingCount} returned medication${returnedAwaitingCount > 1 ? 's are' : ' is'} awaiting pharmacy confirmation.`
+          : noBill
+            ? 'Cannot end — this visit has no billable service yet. Add a procedure/service before sending to billing.'
+            : null
+
+  // The report only opens once the chart has medical content to print.
+  const reportHasContent = !!(
+    visit.diagnosis?.trim() ||
+    visit.subjective || visit.objective || visit.assessment || visit.plan ||
+    visit.chief_complaint ||
+    visit.procedure_name ||
+    readyLabsCount > 0 ||
+    prescriptions.some((p) => (p.items || []).length > 0)
+  )
 
   return (
     <div className="space-y-4">
-      <PatientBanner visit={visit} />
+      <div className="flex items-start gap-3">
+        <PatientBanner visit={visit} visitType={visitType} />
+      </div>
 
-      {isAdmitted && !isDischarged && <ObservationBanner admission={admission} onDischarge={() => setShowDischargeModal(true)} />}
-      {isDischarged && <DischargedBanner admission={admission} />}
-
+      {/* Lab results ready banner */}
       {hasReadyLabs && (
         <div className="flex items-start gap-3 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50 dark:bg-emerald-950/30 p-4">
-          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400 flex items-center justify-center shrink-0"><Icon name="checkCircle" size={18} /></div>
+          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400 flex items-center justify-center shrink-0">
+            <Icon name="checkCircle" size={18} />
+          </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[13px] font-semibold text-emerald-700 dark:text-emerald-400">Lab results ready</p>
-            <p className="text-[11px] text-emerald-700/70 dark:text-emerald-400/70 mt-0.5">{readyLabsCount} test{readyLabsCount > 1 ? 's' : ''} completed.</p>
+            <p className="text-[13px] font-semibold text-emerald-700 dark:text-emerald-400">
+              Lab results ready — review & diagnose
+            </p>
+            <p className="text-[11px] text-emerald-700/70 dark:text-emerald-400/70 mt-0.5">
+              {readyLabsCount} test{readyLabsCount > 1 ? 's' : ''} completed. Review the full results in the Lab Orders section below, record your diagnosis, and prescribe medication if necessary before ending the consultation.
+            </p>
           </div>
         </div>
       )}
 
+      {/* From Pharmacy banner — patient returned with dispensed meds */}
+      {visit.from_pharmacy && (
+        <div className="flex items-start gap-3 rounded-xl border border-cyan-200 dark:border-cyan-900/60 bg-cyan-50 dark:bg-cyan-950/30 p-4">
+          <div className="w-9 h-9 rounded-lg bg-cyan-100 text-cyan-600 dark:bg-cyan-900/40 dark:text-cyan-400 flex items-center justify-center shrink-0">
+            <Icon name="pillBottle" size={18} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-[13px] font-semibold text-cyan-700 dark:text-cyan-400">
+              From Pharmacy — review dispensed medications
+            </p>
+            <p className="text-[11px] text-cyan-700/70 dark:text-cyan-400/70 mt-0.5">
+              The pharmacy has dispensed the prescribed medications. Review them in the Prescriptions section below. If any medication needs to be returned (client declined, wrong dose, adverse reaction), click the return button — the pharmacy will confirm receipt and restock automatically. When ready, end the consultation to send the patient to billing.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Two-column layout */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
+        {/* Left column */}
         <div className="xl:col-span-2 space-y-4">
-          <SoapCard soap={soap} setSoap={setSoap} openSoap={openSoap} setOpenSoap={setOpenSoap} onSave={handleSaveSoap} saving={patchMutation.isPending} />
-          <LabCard requests={labRequests} loading={labsQuery.isLoading} onOrder={() => setShowLabModal(true)} />
-          <DiagnosisCard diagnosis={diagnosis} setDiagnosis={setDiagnosis} diagnosisCode={diagnosisCode} setDiagnosisCode={setDiagnosisCode} onSave={handleSaveDiagnosis} saving={patchMutation.isPending} />
-          <PrescriptionsCard prescriptions={prescriptions} loading={rxQuery.isLoading} onAdd={() => setShowRxModal(true)} />
-          <ProceduresCard visit={visit} onAdd={() => setShowProcedureModal(true)} />
+          {/* SOAP Notes */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title="SOAP Notes"
+              subtitle="Subjective · Objective · Assessment · Plan"
+              action={
+                <button
+                  onClick={handleSaveSoap}
+                  disabled={patchMutation.isPending}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {patchMutation.isPending
+                    ? <Icon name="refresh" size={13} className="animate-spin" />
+                    : <Icon name="save" size={13} />}
+                  Save
+                </button>
+              }
+            />
+            <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
+              <SoapSection
+                letter="S" label="Subjective" hint="Patient-reported symptoms & history"
+                open={openSoap.subjective}
+                onToggle={() => setOpenSoap({ ...openSoap, subjective: !openSoap.subjective })}
+                value={soap.subjective}
+                onChange={(v) => setSoap({ ...soap, subjective: v })}
+                suggestions={SUBJECTIVE_SUGGESTIONS}
+                placeholder="e.g. Patient complains of headache and fever for 3 days. No history of hypertension or diabetes."
+              />
+              <SoapSection
+                letter="O" label="Objective" hint="Examination findings & observed signs"
+                open={openSoap.objective}
+                onToggle={() => setOpenSoap({ ...openSoap, objective: !openSoap.objective })}
+                value={soap.objective}
+                onChange={(v) => setSoap({ ...soap, objective: v })}
+                suggestions={OBJECTIVE_SUGGESTIONS}
+                placeholder="e.g. Alert, oriented. No pallor, jaundice, or cyanosis. Throat mildly erythematous."
+              />
+              <SoapSection
+                letter="A" label="Assessment" hint="Differential & working diagnosis"
+                open={openSoap.assessment}
+                onToggle={() => setOpenSoap({ ...openSoap, assessment: !openSoap.assessment })}
+                value={soap.assessment}
+                onChange={(v) => setSoap({ ...soap, assessment: v })}
+                suggestions={ASSESSMENT_SUGGESTIONS}
+                placeholder="e.g. Likely viral upper respiratory tract infection. Malaria ruled out by negative RDT."
+              />
+              <SoapSection
+                letter="P" label="Plan" hint="Investigations, treatment & follow-up"
+                open={openSoap.plan}
+                onToggle={() => setOpenSoap({ ...openSoap, plan: !openSoap.plan })}
+                value={soap.plan}
+                onChange={(v) => setSoap({ ...soap, plan: v })}
+                suggestions={PLAN_SUGGESTIONS}
+                placeholder="e.g. Paracetamol 1g STAT, plenty of fluids, rest. Review in 3 days if no improvement."
+              />
+            </div>
+          </Card>
+
+          {/* Lab Orders — with detailed template-driven results viewer */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title="Lab Orders"
+              subtitle={pendingLabsCount > 0 ? `${pendingLabsCount} pending test${pendingLabsCount > 1 ? 's' : ''}` : hasReadyLabs ? `${readyLabsCount} result${readyLabsCount > 1 ? 's' : ''} ready — click a test to expand` : 'No lab tests ordered yet'}
+              action={
+                <button
+                  onClick={() => setShowLabModal(true)}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center gap-1.5"
+                >
+                  <Icon name="flask" size={13} /> Order Lab Tests
+                </button>
+              }
+            />
+            <LabOrdersList loading={labsQuery.isLoading} requests={labRequests} patient={patientForEval} />
+          </Card>
+
+           {/* Diagnosis */}
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                  Diagnosis
+                  {labsBlockingDiagnosis && (
+                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                      <Icon name="clock" size={10} /> Locked until labs ready
+                    </Badge>
+                  )}
+                  {!labsBlockingDiagnosis && labRequests.length > 0 && (
+                    <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                      <Icon name="check" size={10} /> Labs complete
+                    </Badge>
+                  )}
+                </h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {labsBlockingDiagnosis
+                    ? 'Diagnosis is recorded AFTER lab results are reviewed'
+                    : 'Final diagnosis & ICD code (optional)'}
+                </p>
+              </div>
+              <button
+                onClick={handleSaveDiagnosis}
+                disabled={patchMutation.isPending || labsBlockingDiagnosis || !diagnosis.trim()}
+                title={labsBlockingDiagnosis ? 'Lab results are still pending — diagnosis is locked' : !diagnosis.trim() ? 'Enter a diagnosis first' : undefined}
+                className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {patchMutation.isPending
+                  ? <Icon name="refresh" size={13} className="animate-spin" />
+                  : labsBlockingDiagnosis
+                    ? <Icon name="clock" size={13} />
+                    : <Icon name="save" size={13} />}
+                Save
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-3">
+                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
+                  Diagnosis {diagnosisCode && <span className="text-[#1a6cbf] dark:text-blue-400 normal-case font-bold ml-1">· {diagnosisCode}</span>}
+                </label>
+                <DiagnosisSearchSelect
+                  code={diagnosisCode}
+                  text={diagnosis}
+                  disabled={labsBlockingDiagnosis}
+                  onSelect={(code, label) => {
+                    setDiagnosisCode(code)
+                    setDiagnosis(label)
+                  }}
+                />
+              </div>
+              {labsBlockingDiagnosis && (
+                <div className="sm:col-span-3 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
+                  <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                    <span className="font-semibold">Diagnosis is locked until lab results are ready.</span> Per clinic protocol, the diagnosis is entered AFTER reviewing the lab results — not before. Once the lab marks all tests as ready, this section unlocks automatically.
+                  </p>
+                </div>
+              )}
+            </div>
+          </Card>
+
+          {/* Prescriptions */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title="Prescriptions"
+              subtitle={ pendingRxCount > 0
+                    ? `${pendingRxCount} pending item${pendingRxCount > 1 ? 's' : ''}`
+                    : 'No prescriptions yet'
+              }
+              action={
+                <button
+                  onClick={() => setShowRxModal(true)}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+                >
+                  <Icon name='pill' size={13} /> Add Prescription
+                </button>
+              }
+            />
+            <PrescriptionsList loading={rxQuery.isLoading} prescriptions={prescriptions} visitId={visitId} />
+          </Card>
+
+          {/* Services & Procedures */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title="Services & Procedures"
+              subtitle={visit?.procedure_fee > 0 ? `${visit.procedure_name} — ${formatMoney(visit.procedure_fee)}` : 'No procedure added'}
+              action={
+                <button
+                  onClick={() => setShowProcedureModal(true)}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center gap-1.5"
+                >
+                  <Icon name="stethoscope" size={13} /> Add Procedure
+                </button>
+              }
+            />
+            <div className="p-4">
+              {visit?.procedure_fee > 0 ? (
+                <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 px-3 py-2.5">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-[13px] font-semibold text-emerald-900 dark:text-emerald-200">{visit.procedure_name}</p>
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        {visit.procedure_type === 'family_planning' ? 'Family Planning' : 'Procedure'} · by {visit.procedure_done_by || 'Doctor'}
+                      </p>
+                      {visit.procedure_notes && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mt-1 italic">"{visit.procedure_notes}"</p>}
+                    </div>
+                    <span className="text-[14px] font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">{formatMoney(visit.procedure_fee)}</span>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-[12px] text-gray-400 text-center py-3">No procedure or service fee added. Click "Add Procedure" if a procedure was performed.</p>
+              )}
+            </div>
+          </Card>
         </div>
 
+        {/* Right column: vitals + end consultation */}
         <div className="space-y-4">
-          <VitalsCard vitals={vitals} setVitals={setVitals} history={visit.vitals_history || []} onSave={handleSaveVitals} saving={patchMutation.isPending} />
-          <ActionCard
-            isAdmitted={isAdmitted} isDischarged={isDischarged} endBlockReason={endBlockReason}
-            onEndConsultation={handleEndConsultation} onStartObservation={() => setShowStartObsModal(true)}
-            onPrintReport={() => setShowReportModal(true)} reportHasContent={reportHasContent} ending={patchMutation.isPending}
-          />
+          {/* Vitals */}
+          <Card className="overflow-hidden">
+            <CardHeader
+              title="Vital Signs"
+              subtitle="Color-coded: red = abnormal"
+              action={
+                <button
+                  onClick={handleSaveVitals}
+                  disabled={patchMutation.isPending}
+                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {patchMutation.isPending
+                    ? <Icon name="refresh" size={13} className="animate-spin" />
+                    : <Icon name="save" size={13} />}
+                  Save
+                </button>
+              }
+            />
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <VitalsField
+                  label="Temp (°C)" icon="thermometer"
+                  value={vitals.temperature}
+                  onChange={(v) => setVitals({ ...vitals, temperature: v })}
+                  placeholder="36.5"
+                  status={vitalStatus('temperature', vitals.temperature)}
+                  abnormalHint=">37.5"
+                />
+                <VitalsField
+                  label="Pulse (bpm)" icon="heart"
+                  value={vitals.pulse}
+                  onChange={(v) => setVitals({ ...vitals, pulse: v })}
+                  placeholder="72"
+                  status={vitalStatus('pulse', vitals.pulse)}
+                  abnormalHint="<60 or >100"
+                />
+                <VitalsField
+                  label="BP Systolic" icon="activity"
+                  value={vitals.bp_systolic}
+                  onChange={(v) => setVitals({ ...vitals, bp_systolic: v })}
+                  placeholder="120"
+                  status={vitalStatus('bp_systolic', vitals.bp_systolic)}
+                  abnormalHint=">140"
+                />
+                <VitalsField
+                  label="BP Diastolic" icon="activity"
+                  value={vitals.bp_diastolic}
+                  onChange={(v) => setVitals({ ...vitals, bp_diastolic: v })}
+                  placeholder="80"
+                  status={vitalStatus('bp_diastolic', vitals.bp_diastolic)}
+                  abnormalHint=">90"
+                />
+                <VitalsField
+                  label="Resp Rate" icon="activity"
+                  value={vitals.respiratory_rate}
+                  onChange={(v) => setVitals({ ...vitals, respiratory_rate: v })}
+                  placeholder="16"
+                  status={vitalStatus('respiratory_rate', vitals.respiratory_rate)}
+                  abnormalHint="<12 or >20"
+                />
+                <VitalsField
+                  label="SpO₂ (%)" icon="droplet"
+                  value={vitals.spo2}
+                  onChange={(v) => setVitals({ ...vitals, spo2: v })}
+                  placeholder="98"
+                  status={vitalStatus('spo2', vitals.spo2)}
+                  abnormalHint="<95"
+                />
+                <VitalsField
+                  label="Weight (kg)" icon="barChart"
+                  value={vitals.weight}
+                  onChange={(v) => setVitals({ ...vitals, weight: v })}
+                  placeholder="65"
+                />
+                <VitalsField
+                  label="Height (cm)" icon="barChart"
+                  value={vitals.height}
+                  onChange={(v) => setVitals({ ...vitals, height: v })}
+                  placeholder="170"
+                />
+              </div>
+
+              {/* BMI helper */}
+              {vitals.weight && vitals.height && (
+                <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 px-3 py-2 flex items-center justify-between">
+                  <span className="text-[11px] font-semibold text-[#1a6cbf] dark:text-blue-400 uppercase tracking-widest">BMI</span>
+                  <span className="text-[13px] font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">
+                    {(parseFloat(vitals.weight) / Math.pow(parseFloat(vitals.height) / 100, 2)).toFixed(1)}
+                  </span>
+                </div>
+              )}
+
+              {/* Vitals notes */}
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Vitals Notes</label>
+                <textarea
+                  value={vitals.vitals_notes ?? ''}
+                  onChange={(e) => setVitals({ ...vitals, vitals_notes: e.target.value })}
+                  rows={2}
+                  placeholder="e.g. Patient appears in mild distress"
+                  className={`${inputCls} resize-none`}
+                />
+              </div>
+            </div>
+          </Card>
+
+          {/* End consultation + report */}
+          <Card className="p-4">
+            <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 mb-1">End Consultation</h3>
+            <p className={`text-[11px] mb-3 ${endBlockReason ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`}>
+              {endBlockReason || 'All services complete — patient will be sent to BILLING for final payment.'}
+            </p>
+            <button
+              onClick={handleEndConsultation}
+              disabled={patchMutation.isPending || !!endBlockReason}
+              title={endBlockReason || undefined}
+              className="w-full px-4 py-2.5 rounded-lg text-[13px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {patchMutation.isPending
+                ? <Icon name="refresh" size={14} className="animate-spin" />
+                : <Icon name="check" size={14} />}
+              End Consultation
+            </button>
+            <button
+              onClick={() => setShowReportModal(true)}
+              disabled={!reportHasContent}
+              title={!reportHasContent ? 'Nothing to report yet — record notes, a diagnosis, results, medications, or a procedure first' : undefined}
+              className="w-full mt-2 px-4 py-2 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+            >
+              <Icon name="printer" size={13} />
+              Print Medical Report
+            </button>
+          </Card>
         </div>
       </div>
 
-      {showStartObsModal && <StartObservationModal onClose={() => setShowStartObsModal(false)} onSubmit={(d) => startObsMutation.mutate(d)} loading={startObsMutation.isPending} patientName={visit.patient_name} />}
-      {showDischargeModal && <DischargeModal onClose={() => setShowDischargeModal(false)} onSubmit={(d) => dischargeMutation.mutate(d)} loading={dischargeMutation.isPending} admission={admission} />}
-      {showLabModal && <LabOrderModal onClose={() => setShowLabModal(false)} onSubmit={(ids, urgency) => { labMutation.mutate({ test_ids: ids, urgency }); setShowLabModal(false) }} loading={labMutation.isPending} />}
-      {showRxModal && <PrescriptionModal onClose={() => setShowRxModal(false)} onSubmit={(items) => { rxMutation.mutate({ items }); setShowRxModal(false) }} loading={rxMutation.isPending} allergies={visit.allergies} />}
-      {showReportModal && <ReportModal visit={visit} onClose={() => setShowReportModal(false)} />}
-      {showProcedureModal && <ProcedureModal onClose={() => setShowProcedureModal(false)} onConfirm={(type, id, notes, price) => { console.log('procedure', type, id, notes, price); setShowProcedureModal(false) }} />}
+      {/* Modals */}
+      {showLabModal && (
+        <LabOrderModal
+          onClose={() => setShowLabModal(false)}
+          onSubmit={handleOrderLabs}
+          loading={labMutation.isPending}
+        />
+      )}
+      {showRxModal && (
+        <PrescriptionModal
+          onClose={() => setShowRxModal(false)}
+          onSubmit={handleAddPrescription}
+          loading={rxMutation.isPending}
+          allergies={visit?.allergies}
+        />
+      )}
+      {showReportModal && (
+        <MedicalReportModal
+          visitId={visitId}
+          onClose={() => setShowReportModal(false)}
+        />
+      )}
+      {showProcedureModal && (
+        <ProcedureModal
+          loading={procedureMutation.isPending}
+          onClose={() => setShowProcedureModal(false)}
+          onConfirm={handleAddProcedure}
+        />
+      )}
     </div>
   )
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Sub-components
-// ═════════════════════════════════════════════════════════════════════════════
+// ─── Sub-components ───────────────────────────────────────────────────────────
 
-function PatientBanner({ visit }) {
-  const isAdmitted = visit.admission?.status === 'admitted'
-  const isDischarged = visit.admission?.status === 'discharged'
+function PatientBanner({ visit, visitType }) {
   return (
     <div className="flex-1 rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] p-4">
       <div className="flex items-start gap-3">
-        <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-[#1a6cbf] to-[#155a9f] flex items-center justify-center shrink-0">
+        <div className="w-12 h-12 rounded-xl bg-linear-to-br from-[#1a6cbf] to-[#155a9f] flex items-center justify-center shrink-0">
           <span className="text-[15px] font-semibold text-white">{visit.patient_name?.charAt(0)}</span>
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <h2 className="text-[15px] font-semibold text-gray-900 dark:text-gray-100">{visit.patient_name}</h2>
-            <Badge className="bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">{visit.patient_age}y · {cap(visit.patient_gender)}</Badge>
+            <Badge className={visitType.badge}>{visitType.label}</Badge>
             <Badge className={badgeClass(visit.status)}>{cap(visit.status)}</Badge>
-            {isAdmitted && <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400"><Icon name="clock" size={10} /> Under Observation</Badge>}
-            {isDischarged && <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400"><Icon name="archive" size={10} /> Discharged</Badge>}
+            {visit.from_pharmacy && (
+              <Badge className="bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400">
+                <Icon name="pillBottle" size={11} /> From Pharmacy
+              </Badge>
+            )}
           </div>
           <div className="flex items-center gap-3 mt-1 text-[11px] text-gray-500 dark:text-gray-400 flex-wrap">
-            <span>Visit #{visit.id}</span><span>·</span><span>Arrived {timeAgo(visit.arrived_at)}</span>
-            {visit.blood_group && <><span>·</span><span className="inline-flex items-center gap-1 text-red-600 dark:text-red-400 font-medium"><Icon name="droplet" size={11} /> {visit.blood_group}</span></>}
+            <span>{visit.patient_age != null ? `${visit.patient_age} yrs` : '—'} · {cap(visit.patient_gender || '—')}</span>
+            {visit.blood_group && (
+              <span className="inline-flex items-center gap-1">
+                <Icon name="droplet" size={11} className="text-red-500" />
+                <span className="text-red-600 dark:text-red-400 font-medium">{visit.blood_group}</span>
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1">
+              <Icon name="clock" size={11} />
+              Arrived {formatTime(visit.arrived_at)}
+            </span>
           </div>
           {visit.chief_complaint && (
             <div className="mt-2 rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2">
@@ -509,9 +847,11 @@ function PatientBanner({ visit }) {
             </div>
           )}
           {visit.allergies && (
-            <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 px-3 py-2">
-              <Icon name="alert" size={13} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-              <p className="text-[11px] text-red-700 dark:text-red-400"><span className="font-semibold">Allergy:</span> {visit.allergies}</p>
+            <div className="mt-2 flex items-start gap-1.5 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2">
+              <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                <span className="font-semibold">Allergy:</span> {visit.allergies}
+              </p>
             </div>
           )}
         </div>
@@ -520,161 +860,166 @@ function PatientBanner({ visit }) {
   )
 }
 
-function ObservationBanner({ admission, onDischarge }) {
+function SoapSection({ letter, label, hint, open, onToggle, value, onChange, placeholder, suggestions }) {
+  const [search, setSearch] = useState('')
+  const [showSuggestions, setShowSuggestions] = useState(false)
+
+  const q = search.trim().toLowerCase()
+  // Empty query on focus shows the first few for discovery; typing filters.
+  const filtered = suggestions
+    ? (q
+        ? suggestions.filter((s) => s.toLowerCase().includes(q)).slice(0, 12)
+        : suggestions.slice(0, 10))
+    : []
+
+  const addSuggestion = (text) => {
+    const current = value ? value.trim() : ''
+    // Append on a new line — findings accumulate, they don't replace.
+    onChange(current ? `${current}\n${text}` : text)
+    setSearch('')
+    setShowSuggestions(false)
+  }
+
   return (
-    <div className="flex items-start justify-between gap-4 rounded-xl border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 p-4">
-      <div className="flex items-start gap-3">
-        <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400 flex items-center justify-center shrink-0"><Icon name="clock" size={18} /></div>
-        <div>
-          <p className="text-[13px] font-semibold text-amber-800 dark:text-amber-400">Patient Under Observation</p>
-          <p className="text-[11px] text-amber-700/70 dark:text-amber-400/70 mt-0.5">
-            Admitted {timeAgo(admission.admitted_at)}
-            {admission.deposit > 0 && <> · Deposit {formatMoney(admission.deposit)}</>}
-            {admission.expected_discharge && <> · Expected {formatDateTime(admission.expected_discharge)}</>}
-          </p>
-          <p className="text-[11px] text-amber-700/70 dark:text-amber-400/70 mt-0.5">Reason: {admission.reason}</p>
+    <div>
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors"
+      >
+        <span className="w-7 h-7 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] dark:text-blue-400 flex items-center justify-center text-[12px] font-bold shrink-0">
+          {letter}
+        </span>
+        <div className="flex-1 text-left min-w-0">
+          <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{label}</p>
+          <p className="text-[11px] text-gray-400">{hint}</p>
         </div>
-      </div>
-      <button onClick={onDischarge} className="shrink-0 px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5">
-        <Icon name="archive" size={12} /> Discharge
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={16} className="text-gray-400 shrink-0" />
       </button>
-    </div>
-  )
-}
-
-function DischargedBanner({ admission }) {
-  return (
-    <div className="flex items-center gap-3 rounded-xl border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-800/40 px-4 py-3">
-      <Icon name="archive" size={14} className="text-gray-500" />
-      <p className="text-[12px] text-gray-600 dark:text-gray-400">
-        <span className="font-semibold">Discharged</span> from observation {timeAgo(admission.discharged_at)}
-        {admission.days_admitted ? <> after {admission.days_admitted} day{admission.days_admitted > 1 ? 's' : ''}</> : null}.
-        End consultation to send to billing.
-      </p>
-    </div>
-  )
-}
-
-function LockedState({ visit }) {
-  return (
-    <div className="rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] p-10 text-center">
-      <div className="w-12 h-12 rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400 flex items-center justify-center mx-auto mb-3"><Icon name="lock" size={22} /></div>
-      <h2 className="text-[15px] font-semibold text-gray-900 dark:text-gray-100">Patient is no longer in consultation</h2>
-      <p className="text-[12px] text-gray-500 dark:text-gray-400 mt-1">{visit.patient_name} has moved to <span className="font-semibold">{cap(visit.status)}</span>.</p>
-    </div>
-  )
-}
-
-function SoapCard({ soap, setSoap, openSoap, setOpenSoap, onSave, saving }) {
-  const sections = [
-    { key: 'subjective', letter: 'S', label: 'Subjective', hint: 'Patient-reported' },
-    { key: 'objective', letter: 'O', label: 'Objective', hint: 'Exam findings' },
-    { key: 'assessment', letter: 'A', label: 'Assessment', hint: 'Working diagnosis' },
-    { key: 'plan', letter: 'P', label: 'Plan', hint: 'Treatment plan' },
-  ]
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader title="SOAP Notes" subtitle="Subjective · Objective · Assessment · Plan"
-        action={<button onClick={onSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50">{saving ? <Icon name="refresh" size={13} className="animate-spin" /> : <Icon name="save" size={13} />} Save</button>} />
-      <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
-        {sections.map((s) => (
-          <div key={s.key}>
-            <button onClick={() => setOpenSoap({ ...openSoap, [s.key]: !openSoap[s.key] })} className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
-              <span className="w-7 h-7 rounded-lg bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] dark:text-blue-400 flex items-center justify-center text-[12px] font-bold shrink-0">{s.letter}</span>
-              <div className="flex-1 text-left min-w-0">
-                <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{s.label}</p>
-                <p className="text-[11px] text-gray-400">{s.hint}</p>
+      {open && (
+        <div className="px-4 pb-4">
+          {/* Suggestion search — type to filter, click or Enter to append */}
+          {suggestions && (
+            <div className="mb-2 relative">
+              <div className="relative">
+                <Icon name="search" size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => { setSearch(e.target.value); setShowSuggestions(true) }}
+                  onFocus={() => setShowSuggestions(true)}
+                  onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      if (filtered.length > 0) addSuggestion(filtered[0])
+                    }
+                    if (e.key === 'Escape') setShowSuggestions(false)
+                  }}
+                  placeholder={`Search ${suggestions.length} common phrases… (Enter adds top match)`}
+                  className="w-full h-8 pl-8 pr-3 text-[12px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+                />
               </div>
-              <Icon name={openSoap[s.key] ? 'chevronDown' : 'chevronRight'} size={16} className="text-gray-400 shrink-0" />
-            </button>
-            {openSoap[s.key] && (
-              <div className="px-4 pb-4">
-                <textarea value={soap[s.key] ?? ''} onChange={(e) => setSoap({ ...soap, [s.key]: e.target.value })} rows={3} placeholder={`Enter ${s.label.toLowerCase()}...`} className={`${inputCls} resize-none`} />
-              </div>
-            )}
-          </div>
-        ))}
-      </div>
-    </Card>
-  )
-}
-
-function LabCard({ requests, loading, onOrder }) {
-  const pending = requests.reduce((n, r) => n + r.items.filter((it) => it.status === 'pending' || it.status === 'in_progress').length, 0)
-  const ready = requests.reduce((n, r) => { if (r.status !== 'ready') return n; return n + r.items.filter((it) => it.status === 'ready' && it.result).length }, 0)
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader title="Lab Orders" subtitle={pending > 0 ? `${pending} pending` : ready > 0 ? `${ready} result(s) ready` : 'No lab tests ordered'}
-        action={<button onClick={onOrder} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] flex items-center gap-1.5"><Icon name="flask" size={13} /> Order Labs</button>} />
-      <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
-        {loading ? <InlineLoader label="Loading labs…" /> : requests.length === 0 ? (
-          <div className="px-4 py-8 text-center text-[12px] text-gray-400">No lab tests ordered yet</div>
-        ) : requests.map((r) => (
-          <div key={r.id} className="px-4 py-3">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2"><Badge className={badgeClass(r.urgency)}>{cap(r.urgency)}</Badge><span className="text-[11px] text-gray-400">{r.ordered_by} · {timeAgo(r.ordered_at)}</span></div>
-              <Badge className={badgeClass(r.status)}>{cap(r.status)}</Badge>
-            </div>
-            <div className="space-y-2">
-              {r.items.map((it) => (
-                <div key={it.id} className={`rounded-lg border px-3 py-2 ${it.status === 'ready' ? 'border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/10' : 'border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-700/20'}`}>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <p className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">{it.test_name}</p>
-                      {it.flagged && <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400 text-[9px]">Abnormal</Badge>}
-                    </div>
-                    <Badge className={badgeClass(it.status)}>{cap(it.status)}</Badge>
-                  </div>
-                  {it.result && (
-                    <div className="mt-1.5 text-[12px]">
-                      <span className="text-gray-500 dark:text-gray-400">Result: </span>
-                      <span className={it.flagged ? 'font-bold text-red-600 dark:text-red-400' : 'font-medium text-emerald-600 dark:text-emerald-400'}>{it.result}</span>
-                      {it.reference_range && <span className="text-gray-400 ml-2">(Ref: {it.reference_range})</span>}
-                    </div>
-                  )}
-                  {it.result_notes && <p className="text-[11px] text-blue-600 dark:text-blue-400 mt-1">{it.result_notes}</p>}
+              {showSuggestions && filtered.length > 0 && (
+                <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg">
+                  {filtered.map((s, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onMouseDown={(e) => { e.preventDefault(); addSuggestion(s) }}
+                      className="w-full text-left px-3 py-1.5 text-[11px] text-gray-700 dark:text-gray-300 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-b border-gray-100 dark:border-gray-700/40 last:border-0 transition-colors"
+                    >
+                      {s}
+                    </button>
+                  ))}
                 </div>
-              ))}
+              )}
+              {showSuggestions && q && filtered.length === 0 && (
+                <div className="absolute z-20 mt-1 w-full rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg px-3 py-2">
+                  <p className="text-[11px] text-gray-400">No matching phrases. Type your own in the text area below.</p>
+                </div>
+              )}
             </div>
-          </div>
-        ))}
-      </div>
-    </Card>
+          )}
+
+          <textarea
+            value={value ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+            rows={3}
+            placeholder={placeholder}
+            className={`${inputCls} resize-none`}
+          />
+        </div>
+      )}
+    </div>
   )
 }
 
-function DiagnosisCard({ diagnosis, setDiagnosis, diagnosisCode, setDiagnosisCode, onSave, saving }) {
-  return (
-    <Card className="p-4">
-      <div className="flex items-center justify-between mb-3">
-        <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">Diagnosis</h3>
-        <button onClick={onSave} disabled={saving || !diagnosis.trim()} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50">{saving ? <Icon name="refresh" size={13} className="animate-spin" /> : <Icon name="save" size={13} />} Save</button>
-      </div>
-      <div>
-        <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Diagnosis {diagnosisCode && <span className="text-[#1a6cbf]">· {diagnosisCode}</span>}</label>
-        <DiagnosisSearchSelect code={diagnosisCode} text={diagnosis} onSelect={(code, label) => { setDiagnosisCode(code); setDiagnosis(label) }} />
-      </div>
-    </Card>
-  )
-}
-
-function DiagnosisSearchSelect({ code, text, onSelect }) {
+// ─── DiagnosisSearchSelect — searchable ICD catalog with free-text escape ────
+// Filters DIAGNOSIS_CATALOG by code or label; clicking sets BOTH the diagnosis
+// text and its code. If nothing in the catalog fits, the last row offers the
+// typed text as a free-text diagnosis (code cleared) — the catalog never
+// blocks recording an uncatalogued condition.
+function DiagnosisSearchSelect({ code, text, disabled, onSelect }) {
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
-  const selectedItem = code ? DIAGNOSIS_CATALOG.find((d) => d.code === code) : null
-  const q = search.trim().toLowerCase()
-  const filtered = q ? DIAGNOSIS_CATALOG.filter((d) => d.label.toLowerCase().includes(q) || d.code.toLowerCase().includes(q)).slice(0, 15) : []
 
-  if ((selectedItem || (text && !code)) && !open) {
+  const selectedItem = code ? DIAGNOSIS_CATALOG.find((d) => d.code === code) : null
+  const hasFreeText = !code && !!text?.trim()
+
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? DIAGNOSIS_CATALOG.filter((d) =>
+        d.label.toLowerCase().includes(q) || d.code.toLowerCase().includes(q)
+      ).slice(0, 15)
+    : []
+
+  const pick = (c, label) => {
+    onSelect(c, label)
+    setSearch('')
+    setOpen(false)
+  }
+
+  if (disabled) {
+    return (
+      <div className={`${inputCls} opacity-60 cursor-not-allowed bg-gray-50 dark:bg-gray-800/50`}>
+        <span className="text-gray-400">Locked — waiting for lab results</span>
+      </div>
+    )
+  }
+
+  // Selected state — coded pick or free-text, with edit/clear controls
+  if ((selectedItem || hasFreeText) && !open) {
     return (
       <div className={`${inputCls} flex items-center justify-between`}>
         <span className="flex items-center gap-2 min-w-0">
-          {selectedItem ? <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] text-[10px] font-bold shrink-0">{selectedItem.code}</span> : <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700/40 text-gray-500 text-[10px] font-bold shrink-0">free text</span>}
-          <span className="truncate">{selectedItem ? selectedItem.label : text}</span>
+          {selectedItem ? (
+            <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] dark:text-blue-400 text-[10px] font-bold tabular-nums shrink-0">
+              {selectedItem.code}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700/40 text-gray-500 dark:text-gray-400 text-[10px] font-bold shrink-0">
+              free text
+            </span>
+          )}
+          <span className="text-gray-900 dark:text-gray-100 truncate">{selectedItem ? selectedItem.label : text}</span>
         </span>
         <span className="flex items-center gap-1 shrink-0">
-          <button type="button" onClick={() => { setOpen(true); setSearch('') }} className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-[#1a6cbf]"><Icon name="edit" size={12} /></button>
-          <button type="button" onClick={() => onSelect('', '')} className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500"><Icon name="x" size={12} /></button>
+          <button
+            type="button"
+            onClick={() => { setOpen(true); setSearch('') }}
+            title="Change diagnosis"
+            className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-[#1a6cbf] hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors"
+          >
+            <Icon name="edit" size={12} />
+          </button>
+          <button
+            type="button"
+            onClick={() => pick('', '')}
+            title="Clear diagnosis"
+            className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+          >
+            <Icon name="x" size={12} />
+          </button>
         </span>
       </div>
     )
@@ -683,24 +1028,54 @@ function DiagnosisSearchSelect({ code, text, onSelect }) {
   return (
     <div className="relative">
       <div className="relative">
-        <Icon name="search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input type="text" value={search} onChange={(e) => { setSearch(e.target.value); setOpen(true) }} onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)}
-          placeholder="Search diagnoses…" className={`${inputCls} pl-9`} />
+        <Icon name="search" size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => { setSearch(e.target.value); setOpen(true) }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              if (filtered.length > 0) pick(filtered[0].code, filtered[0].label)
+              else if (q) pick('', search.trim())
+            }
+          }}
+          placeholder={`Search ${DIAGNOSIS_CATALOG.length} diagnoses by name or ICD code…`}
+          className={`${inputCls} pl-9`}
+        />
       </div>
+
       {open && q && (
         <div className="absolute z-30 mt-1 w-full max-h-72 overflow-y-auto rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg">
           {filtered.map((d) => (
-            <button key={d.code} type="button" onMouseDown={(e) => { e.preventDefault(); onSelect(d.code, d.label); setSearch(''); setOpen(false) }}
-              className="w-full text-left px-3 py-2 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-b border-gray-100 dark:border-gray-700/40 transition-colors">
+            <button
+              key={d.code}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); pick(d.code, d.label) }}
+              className="w-full text-left px-3 py-2 hover:bg-blue-50 dark:hover:bg-blue-950/30 border-b border-gray-100 dark:border-gray-700/40 transition-colors"
+            >
               <div className="flex items-center gap-2">
-                <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] text-[10px] font-bold shrink-0">{d.code}</span>
+                <span className="px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/40 text-[#1a6cbf] dark:text-blue-400 text-[10px] font-bold tabular-nums shrink-0">
+                  {d.code}
+                </span>
                 <span className="text-[12px] text-gray-700 dark:text-gray-300">{d.label}</span>
+                {DIAGNOSIS_CATEGORIES[d.category] && (
+                  <span className="text-[9px] text-gray-400 ml-auto shrink-0">{DIAGNOSIS_CATEGORIES[d.category]}</span>
+                )}
               </div>
             </button>
           ))}
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); onSelect('', search.trim()); setSearch(''); setOpen(false) }}
-            className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors">
-            <span className="text-[11px] text-gray-500">Use &quot;<span className="font-semibold text-gray-700">{search.trim()}</span>&quot; as free-text</span>
+          {/* Free-text escape — the catalog never blocks an uncatalogued diagnosis */}
+          <button
+            type="button"
+            onMouseDown={(e) => { e.preventDefault(); pick('', search.trim()) }}
+            className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-colors"
+          >
+            <span className="text-[11px] text-gray-500 dark:text-gray-400">
+              Use "<span className="font-semibold text-gray-700 dark:text-gray-200">{search.trim()}</span>" as free-text diagnosis (no ICD code)
+            </span>
           </button>
         </div>
       )}
@@ -708,552 +1083,1176 @@ function DiagnosisSearchSelect({ code, text, onSelect }) {
   )
 }
 
-function PrescriptionsCard({ prescriptions, loading, onAdd }) {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader title="Prescriptions" subtitle={prescriptions.length > 0 ? `${prescriptions.reduce((n, p) => n + (p.items || []).length, 0)} item(s)` : 'No prescriptions'}
-        action={<button onClick={onAdd} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] flex items-center gap-1.5"><Icon name="pill" size={13} /> Prescribe</button>} />
-      <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
-        {loading ? <InlineLoader label="Loading prescriptions…" /> : prescriptions.length === 0 ? (
-          <div className="px-4 py-8 text-center text-[12px] text-gray-400">No prescriptions yet</div>
-        ) : prescriptions.map((p) => (
-          <div key={p.id} className="px-4 py-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] text-gray-400">{p.prescribed_by} · {timeAgo(p.prescribed_at)}</span>
-              <Badge className={badgeClass(p.status)}>{cap(p.status)}</Badge>
-            </div>
-            <div className="space-y-3">
-              {p.items.map((it) => (
-                <div key={it.id} className="rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{it.medication}</p>
-                        {it.form === 'injection' && <Badge className="bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400 text-[9px]"><Icon name="syringe" size={8} /> Injection</Badge>}
-                        <Badge className={badgeClass(it.status)}>{cap(it.status)}</Badge>
-                      </div>
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{it.dosage} · {it.frequency} · {it.duration} · Qty {it.quantity}</p>
-                    </div>
-                    <span className="text-[12px] font-semibold tabular-nums text-gray-700 dark:text-gray-300">{formatMoney(it.unit_cost * it.quantity)}</span>
-                  </div>
-                  <MedicationSchedule frequency={it.frequency} duration={it.duration} prescribedAt={p.prescribed_at} />
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-    </Card>
-  )
-}
-
-function ProceduresCard({ visit, onAdd }) {
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader title="Services & Procedures" subtitle={visit.procedure_fee > 0 ? `${visit.procedure_name} — ${formatMoney(visit.procedure_fee)}` : 'No procedure added'}
-        action={<button onClick={onAdd} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] flex items-center gap-1.5"><Icon name="stethoscope" size={13} /> Add Procedure</button>} />
-      <div className="p-4">
-        {visit.procedure_fee > 0 ? (
-          <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 px-3 py-2.5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-[13px] font-semibold text-emerald-900 dark:text-emerald-200">{visit.procedure_name}</p>
-                <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">{cap(visit.procedure_type || 'procedure')} · {visit.procedure_done_by || 'Doctor'}</p>
-              </div>
-              <span className="text-[14px] font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">{formatMoney(visit.procedure_fee)}</span>
-            </div>
-          </div>
-        ) : (
-          <p className="text-[12px] text-gray-400 text-center py-3">No procedure added. Click &quot;Add Procedure&quot; if one was performed.</p>
-        )}
-      </div>
-    </Card>
-  )
-}
-
-function VitalsCard({ vitals, setVitals, history, onSave, saving }) {
-  const fields = [
-    { key: 'temperature', label: 'Temp (°C)', icon: 'thermometer', placeholder: '36.5', hint: '>37.5' },
-    { key: 'pulse', label: 'Pulse (bpm)', icon: 'heart', placeholder: '72', hint: '<60 or >100' },
-    { key: 'bp_systolic', label: 'BP Sys', icon: 'activity', placeholder: '120', hint: '>140' },
-    { key: 'bp_diastolic', label: 'BP Dia', icon: 'activity', placeholder: '80', hint: '>90' },
-    { key: 'respiratory_rate', label: 'RR', icon: 'activity', placeholder: '16', hint: '<12 or >20' },
-    { key: 'spo2', label: 'SpO₂ (%)', icon: 'droplet', placeholder: '98', hint: '<95' },
-    { key: 'weight', label: 'Weight (kg)', icon: 'barChart', placeholder: '65' },
-    { key: 'height', label: 'Height (cm)', icon: 'barChart', placeholder: '170' },
-  ]
-
-  return (
-    <Card className="overflow-hidden">
-      <CardHeader title="Vital Signs" subtitle={history.length > 0 ? `${history.length} previous reading(s)` : 'Color-coded: red = abnormal'}
-        action={<button onClick={onSave} disabled={saving} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50">{saving ? <Icon name="refresh" size={13} className="animate-spin" /> : <Icon name="save" size={13} />} Save</button>} />
-      <div className="p-4 space-y-3">
-        <div className="grid grid-cols-2 gap-3">
-          {fields.map((f) => (
-            <VitalsField key={f.key} label={f.label} icon={f.icon} value={vitals[f.key]} onChange={(v) => setVitals({ ...vitals, [f.key]: v })} placeholder={f.placeholder} status={vitalStatus(f.key, vitals[f.key])} abnormalHint={f.hint} />
-          ))}
-        </div>
-        {vitals.weight && vitals.height && (
-          <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 px-3 py-2 flex items-center justify-between">
-            <span className="text-[11px] font-semibold text-[#1a6cbf] dark:text-blue-400 uppercase tracking-widest">BMI</span>
-            <span className="text-[13px] font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">{(parseFloat(vitals.weight) / Math.pow(parseFloat(vitals.height) / 100, 2)).toFixed(1)}</span>
-          </div>
-        )}
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Vitals Notes</label>
-          <textarea value={vitals.vitals_notes ?? ''} onChange={(e) => setVitals({ ...vitals, vitals_notes: e.target.value })} rows={2} placeholder="e.g. Patient appears in mild distress" className={`${inputCls} resize-none`} />
-        </div>
-
-        {/* Vitals history table */}
-        {history.length > 0 && (
-          <div className="mt-2">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">History</p>
-            <div className="max-h-40 overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700">
-              <table className="w-full text-[11px]">
-                <thead className="bg-gray-50 dark:bg-gray-800/60 sticky top-0">
-                  <tr className="text-left text-gray-500 dark:text-gray-400">
-                    <th className="px-2 py-1.5 font-semibold">Time</th>
-                    <th className="px-2 py-1.5 font-semibold">T</th>
-                    <th className="px-2 py-1.5 font-semibold">BP</th>
-                    <th className="px-2 py-1.5 font-semibold">P</th>
-                    <th className="px-2 py-1.5 font-semibold">SpO₂</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100 dark:divide-gray-700/40">
-                  {history.map((h) => (
-                    <tr key={h.id} className="text-gray-700 dark:text-gray-300">
-                      <td className="px-2 py-1.5 whitespace-nowrap">{formatTime(h.recorded_at)}</td>
-                      <td className="px-2 py-1.5">{h.temperature ?? '—'}</td>
-                      <td className="px-2 py-1.5">{h.bp_systolic ? `${h.bp_systolic}/${h.bp_diastolic}` : '—'}</td>
-                      <td className="px-2 py-1.5">{h.pulse ?? '—'}</td>
-                      <td className="px-2 py-1.5">{h.spo2 ?? '—'}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </div>
-    </Card>
-  )
-}
-
 function VitalsField({ label, icon, value, onChange, placeholder, status, abnormalHint }) {
-  const borderColor = status === 'abnormal' ? 'border-red-300 dark:border-red-900/60 focus:border-red-500 focus:ring-red-500/30' : status === 'normal' ? 'border-emerald-300 dark:border-emerald-900/60 focus:border-emerald-500 focus:ring-emerald-500/30' : ''
-  const valueColor = status === 'abnormal' ? 'text-red-600 dark:text-red-400 font-semibold' : status === 'normal' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-gray-900 dark:text-gray-100'
+  const borderColor =
+    status === 'abnormal'
+      ? 'border-red-300 dark:border-red-900/60 focus:border-red-500 focus:ring-red-500/30'
+      : status === 'normal'
+        ? 'border-emerald-300 dark:border-emerald-900/60 focus:border-emerald-500 focus:ring-emerald-500/30'
+        : ''
+  const valueColor =
+    status === 'abnormal'
+      ? 'text-red-600 dark:text-red-400 font-semibold'
+      : status === 'normal'
+        ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+        : 'text-gray-900 dark:text-gray-100'
   return (
     <div>
       <label className="flex items-center justify-between text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-        <span className="flex items-center gap-1">{icon && <Icon name={icon} size={11} />}{label}</span>
-        {status === 'abnormal' && abnormalHint && <span className="text-[9px] text-red-500 dark:text-red-400 font-medium normal-case">abnormal {abnormalHint}</span>}
+        <span className="flex items-center gap-1">
+          {icon && <Icon name={icon} size={11} />}
+          {label}
+        </span>
+        {status === 'abnormal' && abnormalHint && (
+          <span className="text-[9px] text-red-500 dark:text-red-400 font-medium normal-case tracking-normal">abnormal {abnormalHint}</span>
+        )}
       </label>
-      <input type="number" step="any" value={value ?? ''} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} className={`${inputCls} ${borderColor} ${valueColor} tabular-nums`} />
+      <input
+        type="number"
+        step="any"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`${inputCls} ${borderColor} ${valueColor} tabular-nums`}
+      />
     </div>
   )
 }
 
-function ActionCard({ isAdmitted, isDischarged, endBlockReason, onEndConsultation, onStartObservation, onPrintReport, reportHasContent, ending }) {
-  return (
-    <Card className="p-4 space-y-3">
-      {/* Observation actions */}
-      {!isAdmitted && !isDischarged && (
-        <button onClick={onStartObservation} className="w-full px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-amber-200 dark:border-amber-900/60 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 flex items-center justify-center gap-2">
-          <Icon name="clock" size={14} /> Start Observation
-        </button>
-      )}
+// ═══ Lab results viewer ════════════════════════════════════════════════════════
+// Renders each item's result_data against its catalog result_template — the
+// same shape the lab tech's ResultsModal writes and the printed ReportModal
+// reads. Ready items default open; anything with structured results can be
+// expanded/collapsed. Falls back to the simple `result` string when a test
+// has no template.
 
-      {isAdmitted && !isDischarged && (
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 text-center">
-          <p className="text-[12px] text-amber-700 dark:text-amber-400 font-medium">Observation in progress</p>
-          <p className="text-[11px] text-amber-600 dark:text-amber-400/70 mt-0.5">Discharge patient to enable billing</p>
+// Flag colour per evaluation status (matches the printed report)
+const FLAG_TEXT = {
+  low:      'font-bold text-amber-600 dark:text-amber-400',
+  high:     'font-bold text-red-600 dark:text-red-400',
+  abnormal: 'font-bold text-red-600 dark:text-red-400',
+}
+
+const ITEM_STATUS_BADGE = {
+  pending:     'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
+  in_progress: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  ready:       'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+}
+
+function LabOrdersList({ loading, requests, patient }) {
+  const [openItems, setOpenItems] = useState({})
+
+  if (loading) return <InlineLoader label="Loading lab orders…" />
+  if (!requests.length) {
+    return (
+      <div className="px-4 py-8 text-center">
+        <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-700/40 flex items-center justify-center mx-auto mb-2">
+          <Icon name="flask" size={18} className="text-gray-400" />
         </div>
-      )}
-
-      {isDischarged && (
-        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 px-3 py-2 text-center">
-          <p className="text-[12px] text-emerald-700 dark:text-emerald-400 font-medium">Patient discharged</p>
-          <p className="text-[11px] text-emerald-600 dark:text-emerald-400/70 mt-0.5">Ready for billing</p>
-        </div>
-      )}
-
-      {/* End consultation */}
-      <div>
-        <p className={`text-[11px] mb-2 ${endBlockReason ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`}>
-          {endBlockReason || 'All services complete — send to billing'}
-        </p>
-        <button onClick={onEndConsultation} disabled={ending || !!endBlockReason} title={endBlockReason || undefined}
-          className="w-full px-4 py-2.5 rounded-lg text-[13px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-          {ending ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="check" size={14} />}
-          End Consultation
-        </button>
+        <p className="text-[12px] text-gray-500 dark:text-gray-400">No lab tests ordered for this visit yet</p>
       </div>
+    )
+  }
 
-      {/* Print report */}
-      <button onClick={onPrintReport} disabled={!reportHasContent}
-        className="w-full px-4 py-2 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] flex items-center justify-center gap-1.5 disabled:opacity-50">
-        <Icon name="printer" size={13} /> Print Medical Report
-      </button>
-    </Card>
+  const toggle = (id) => setOpenItems((s) => ({ ...s, [id]: !(s[id] ?? true) }))
+
+  return (
+    <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
+      {requests.map((r) => (
+        <div key={r.id} className="px-4 py-3">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge className={badgeClass(r.urgency)}>{cap(r.urgency)}</Badge>
+              <span className="text-[11px] text-gray-400">
+                Ordered {timeAgo(r.ordered_at)} · {r.ordered_by}
+              </span>
+            </div>
+            <Badge className={badgeClass(r.status)}>{cap(r.status)}</Badge>
+          </div>
+
+          <div className="space-y-2">
+            {r.items.map((it) => {
+              const hasStructured = !!(it.result_data && it.result_template?.sections?.length)
+              const hasAnyResult = hasStructured || !!it.result
+              const isReady = it.status === 'ready'
+              // Ready results default open; user toggles override
+              const isOpen = hasAnyResult && (openItems[it.id] ?? isReady)
+              const statusCls = ITEM_STATUS_BADGE[it.status] || ITEM_STATUS_BADGE.pending
+
+              return (
+                <div
+                  key={it.id}
+                  className={[
+                    'rounded-lg border overflow-hidden',
+                    isReady
+                      ? 'border-emerald-200 dark:border-emerald-900/50 bg-emerald-50/30 dark:bg-emerald-950/10'
+                      : 'border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-700/20',
+                  ].join(' ')}
+                >
+                  {/* Item header — clickable when results exist */}
+                  <button
+                    type="button"
+                    onClick={() => hasAnyResult && toggle(it.id)}
+                    disabled={!hasAnyResult}
+                    className={`w-full flex items-center justify-between gap-3 px-3 py-2 text-left ${hasAnyResult ? 'hover:bg-white/60 dark:hover:bg-gray-700/30 cursor-pointer' : 'cursor-default'} transition-colors`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-[12px] font-semibold text-gray-900 dark:text-gray-100">{it.test_name}</p>
+                        {it.flagged && (
+                          <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+                            <Icon name="alert" size={10} /> Abnormal
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        {cap(it.category || 'uncategorised')}
+                        {it.completed_at && ` · Completed ${formatDate(it.completed_at)} ${formatTime(it.completed_at)}`}
+                        {!it.completed_at && it.reference_range && ` · Ref: ${it.reference_range}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {!hasAnyResult && <span className="text-[11px] text-gray-400 italic">awaiting</span>}
+                      <Badge className={statusCls}>{cap(it.status)}</Badge>
+                      {hasAnyResult && (
+                        <Icon name={isOpen ? 'chevronDown' : 'chevronRight'} size={14} className="text-gray-400" />
+                      )}
+                    </div>
+                  </button>
+
+                  {/* Expanded result body */}
+                  {isOpen && (
+                    <div className="border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] px-3 py-3">
+                      {hasStructured ? (
+                        <>
+                          {it.result_template.sections.map((section, si) => (
+                            <ResultSection
+                              key={si}
+                              section={section}
+                              index={si}
+                              sectionCount={it.result_template.sections.length}
+                              values={it.result_data || {}}
+                              patient={patient}
+                            />
+                          ))}
+                        </>
+                      ) : (
+                        // Fallback: simple summary result
+                        <div className="flex items-center justify-between text-[12px]">
+                          <span className="text-gray-500 dark:text-gray-400">Result</span>
+                          <span className={it.flagged ? FLAG_TEXT.abnormal : 'font-semibold text-emerald-600 dark:text-emerald-400'}>
+                            {it.result || '—'}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Tech comment */}
+                      {it.result_notes && (
+                        <div className="mt-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 px-3 py-2 flex items-start gap-2">
+                          <Icon name="info" size={12} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+                          <p className="text-[11px] text-blue-700 dark:text-blue-400">
+                            <span className="font-semibold">Lab comment: </span>{it.result_notes}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
   )
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// Modals
-// ═════════════════════════════════════════════════════════════════════════════
+// One template section: number/select/radio/text → label|value|ref rows,
+// textarea → free-text block, sensitivity → antibiotic table.
+function ResultSection({ section, index, sectionCount, values, patient }) {
+  const fields = section.fields || []
+  const hasInline = fields.some((f) => !['textarea', 'sensitivity'].includes(f.input_type))
+
+  const evaluated = fields.map((f) => {
+    if (['textarea', 'sensitivity'].includes(f.input_type)) return { f }
+    const raw = values[f.key]
+    const has = raw != null && raw !== ''
+    const { status, range } = evaluateField(f, raw, patient)
+    return {
+      f,
+      display: has ? `${raw}${f.unit ? ` ${f.unit}` : ''}` : '—',
+      status: has ? status : null, // 'low' | 'high' | 'abnormal' | 'normal' | 'unknown'
+      range: range || f.reference_range || null,
+    }
+  })
+  const showRef = evaluated.some((e) => e.range)
+
+  return (
+    <div className={index > 0 ? 'mt-4' : ''}>
+      {/* Section header — only shown when the template has multiple sections
+          or a real title, to keep single-panel tests compact */}
+      {(section.title || sectionCount > 1) && (
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500 dark:text-gray-400">
+            {section.title || `Section ${index + 1}`}
+          </span>
+          <span className="flex-1 border-t border-gray-200 dark:border-gray-700/60" />
+        </div>
+      )}
+
+      {/* Column headers for inline fields */}
+      {hasInline && (
+        <div className="flex text-[9px] font-bold uppercase tracking-widest text-gray-400 px-2 pb-1">
+          <div className={showRef ? 'w-2/5' : 'w-3/5'}>Parameter</div>
+          <div className="flex-1 text-center">Result</div>
+          {showRef && <div className="w-2/5 text-right">Ref. Range</div>}
+        </div>
+      )}
+
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-100 dark:divide-gray-700/40 overflow-hidden">
+        {evaluated.map(({ f, display, status, range }) => {
+          // Sensitivity table (culture & sensitivity tests)
+          if (f.input_type === 'sensitivity') {
+            const raw = values[f.key]
+            const rows = Array.isArray(raw) ? raw.filter((r) => r.antibiotic) : []
+            if (!rows.length) return null
+            return (
+              <div key={f.key}>
+                <div className="flex text-[10px] font-bold uppercase tracking-wider bg-gray-100 dark:bg-gray-700/40 text-gray-500 dark:text-gray-400 px-2 py-1">
+                  <div className="w-3/5">{f.rows_label || 'Antibiotic'}</div>
+                  <div className="flex-1 text-center">Sensitivity</div>
+                </div>
+                {rows.map((row, ri) => (
+                  <div key={ri} className="flex text-[12px] px-2 py-1 border-t border-gray-100 dark:border-gray-700/40">
+                    <div className="w-3/5 text-gray-700 dark:text-gray-300">{row.antibiotic}</div>
+                    <div className="flex-1 text-center font-semibold text-gray-900 dark:text-gray-100">{row.result || '—'}</div>
+                  </div>
+                ))}
+              </div>
+            )
+          }
+
+          // Free-text block (deposits, microscopy descriptions, comments)
+          if (f.input_type === 'textarea') {
+            const raw = values[f.key]
+            const text = raw != null && raw !== '' ? String(raw) : null
+            if (!text) return null
+            return (
+              <div key={f.key} className="px-2 py-1.5 text-[12px] text-gray-700 dark:text-gray-300 whitespace-pre-line">
+                {f.label && <span className="font-semibold text-gray-900 dark:text-gray-100">{f.label}: </span>}{text}
+              </div>
+            )
+          }
+
+          // Standard parameter row
+          return (
+            <div key={f.key} className="flex items-center text-[12px] px-2 py-1.5">
+              <div className={`${showRef ? 'w-2/5' : 'w-3/5'} text-gray-600 dark:text-gray-400`}>{f.label}</div>
+              <div className={`flex-1 text-center tabular-nums ${FLAG_TEXT[status] || 'font-medium text-gray-900 dark:text-gray-100'}`}>
+                {display}
+                {status === 'low' && <span className="ml-1 text-[9px] font-bold uppercase">↓ low</span>}
+                {status === 'high' && <span className="ml-1 text-[9px] font-bold uppercase">↑ high</span>}
+              </div>
+              {showRef && (
+                <div className="w-2/5 text-right font-mono text-[10px] text-gray-400">{range || ''}</div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ═══ Prescriptions ═════════════════════════════════════════════════════════════
+
+// Only issued (dispensed) medications can be returned to pharmacy.
+// Pending items haven't been dispensed yet — no stock movement to reverse.
+const RETURNABLE_ITEM_STATUSES = ['issued']
+
+const RETURN_REASON_SUGGESTIONS = [
+  'Client declined',
+  'Wrong medication',
+  'Adverse reaction',
+]
+
+const ITEM_STATUS_BADGES = {
+  pending:   { label: 'Pending',      cls: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400' },
+  issued:    { label: 'Issued',       cls: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  returned:  { label: 'Returned — awaiting pharmacy confirmation', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+  restocked: { label: 'Restocked',    cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+  declined:  { label: 'Declined',     cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+  cancelled: { label: 'Cancelled',    cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+}
+
+function PrescriptionsList({ loading, prescriptions, visitId }) {
+  const queryClient = useQueryClient()
+  const user = useAuthStore((s) => s.user)
+  const [returnTarget, setReturnTarget] = useState(null) // { prescription, item }
+  const [returnReason, setReturnReason] = useState(RETURN_REASON_SUGGESTIONS[0])
+
+  // API: PATCH /api/doctor/prescriptions/[id]/return-item
+  const returnItemMutation = useMutation({
+    mutationFn: ({ prescriptionId, itemId, doctorName, reason }) =>
+      api.patch(`/api/doctor/prescriptions/${prescriptionId}/return-item`, {
+        item_id: itemId,
+        doctor_name: doctorName,
+        reason,
+      }),
+    onSuccess: (_data, variables) => {
+      toast.success(`${variables.medicationName} returned to pharmacy`)
+      setReturnTarget(null)
+      setReturnReason(RETURN_REASON_SUGGESTIONS[0])
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Could not return item to pharmacy')
+    },
+  })
+
+  const openReturnModal = (prescription, item) => {
+    setReturnTarget({ prescription, item })
+    setReturnReason(RETURN_REASON_SUGGESTIONS[0])
+  }
+
+  const closeReturnModal = () => {
+    if (returnItemMutation.isPending) return
+    setReturnTarget(null)
+    setReturnReason(RETURN_REASON_SUGGESTIONS[0])
+  }
+
+  const confirmReturn = () => {
+    if (!returnTarget || !returnReason.trim()) return
+    returnItemMutation.mutate({
+      prescriptionId: returnTarget.prescription.id,
+      itemId: returnTarget.item.id,
+      doctorName: user?.username || 'Doctor',
+      reason: returnReason.trim(),
+      medicationName: returnTarget.item.medication,
+    })
+  }
+
+  if (loading) return <InlineLoader label="Loading prescriptions…" />
+  if (!prescriptions.length) {
+    return (
+      <div className="px-4 py-8 text-center">
+        <div className="w-10 h-10 rounded-xl bg-gray-100 dark:bg-gray-700/40 flex items-center justify-center mx-auto mb-2">
+          <Icon name="pill" size={18} className="text-gray-400" />
+        </div>
+        <p className="text-[12px] text-gray-500 dark:text-gray-400">No prescriptions for this visit yet</p>
+      </div>
+    )
+  }
+  return (
+    <>
+      <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
+        {prescriptions.map((p) => (
+          <div key={p.id} className="px-4 py-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <span className="text-[11px] text-gray-400">
+                Prescribed {timeAgo(p.prescribed_at)} · {p.prescribed_by}
+              </span>
+              <Badge className={badgeClass(p.status)}>{cap(p.status)}</Badge>
+            </div>
+            <div className="space-y-1.5">
+              {p.items.map((it) => {
+                const isReturnable = RETURNABLE_ITEM_STATUSES.includes(it.status)
+                const statusBadge = ITEM_STATUS_BADGES[it.status] || ITEM_STATUS_BADGES.pending
+                const isInjectable = it.form === 'injection'
+                const feeRemoved = ['returned', 'restocked', 'declined', 'cancelled'].includes(it.status)
+                return (
+                  <div
+                    key={it.id}
+                    className="rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-[12px] font-medium text-gray-900 dark:text-gray-100">
+                            {it.medication}
+                          </p>
+                          {isInjectable && (
+                            <Badge className="bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">
+                              <Icon name="syringe" size={10} /> Injection
+                            </Badge>
+                          )}
+                          <Badge className={statusBadge.cls}>{statusBadge.label}</Badge>
+                        </div>
+                        <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">
+                          {it.dosage} · {it.frequency} · {it.duration} · Qty {it.quantity}
+                        </p>
+                        {it.return_reason && (it.status === 'returned' || it.status === 'restocked') && (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <Icon name="alert" size={11} className="shrink-0" />
+                            <span>{it.return_reason}</span>
+                          </p>
+                        )}
+                        {it.decline_reason && it.status === 'declined' && (
+                          <p className="text-[10px] text-orange-600 dark:text-orange-400 mt-1 flex items-center gap-1">
+                            <Icon name="alert" size={11} className="shrink-0" />
+                            <span>{it.decline_reason}</span>
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span className={`text-[12px] font-semibold tabular-nums ${feeRemoved ? 'text-gray-400 line-through' : 'text-gray-700 dark:text-gray-300'}`}>
+                          {formatMoney(it.unit_cost * (it.quantity || 1))}
+                        </span>
+                        {isReturnable && (
+                          <button
+                            type="button"
+                            onClick={() => openReturnModal(p, it)}
+                            disabled={returnItemMutation.isPending}
+                            title="Return to pharmacy"
+                            aria-label={`Return ${it.medication} to pharmacy`}
+                            className="w-7 h-7 flex items-center justify-center rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 border border-transparent hover:border-red-200 dark:hover:border-red-900/60 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <Icon name="trash" size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {returnTarget && (
+        <ReturnItemModal
+          prescription={returnTarget.prescription}
+          item={returnTarget.item}
+          reason={returnReason}
+          setReason={setReturnReason}
+          loading={returnItemMutation.isPending}
+          onClose={closeReturnModal}
+          onConfirm={confirmReturn}
+        />
+      )}
+    </>
+  )
+}
+
+// ReturnItemModal — confirmation modal for returning a single med item to pharmacy
+function ReturnItemModal({ prescription, item, reason, setReason, loading, onClose, onConfirm }) {
+  const footer = (
+    <div className="flex items-center justify-end gap-2">
+      <button
+        type="button"
+        onClick={onClose}
+        disabled={loading}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Keep Item
+      </button>
+      <button
+        type="button"
+        onClick={onConfirm}
+        disabled={loading || !reason.trim()}
+        className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {loading ? (
+          <Icon name="refresh" size={12} className="animate-spin" />
+        ) : (
+          <Icon name="trash" size={12} />
+        )}
+        Return to Pharmacy
+      </button>
+    </div>
+  )
+
+  return (
+    <ModalShell
+      title="Return medication to pharmacy"
+      subtitle={`Prescription #${prescription.id} · ${item.medication}`}
+      onClose={onClose}
+      maxWidth="max-w-md"
+      footer={footer}
+    >
+      {/* Item summary */}
+      <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2 mb-4">
+        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.medication}</p>
+        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+          {item.dosage} · {item.frequency} · {item.duration} · Qty {item.quantity}
+        </p>
+      </div>
+
+      {/* Warning banner */}
+      <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2 mb-4">
+        <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+        <p className="text-[11px] text-amber-700 dark:text-amber-400">
+          Returning this medication will remove its fee from the patient&rsquo;s bill immediately.
+          The medication&rsquo;s stock will be restored once the pharmacist confirms receipt of the
+          returned item. This cannot be undone.
+        </p>
+      </div>
+
+      {/* Reason input */}
+      <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+        Reason for return
+      </label>
+      <input
+        type="text"
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="Enter the reason…"
+        className={inputCls}
+      />
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {RETURN_REASON_SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            type="button"
+            onClick={() => setReason(s)}
+            className={[
+              'px-2 py-1 rounded-full text-[11px] font-medium transition-colors border',
+              reason === s
+                ? 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-400 dark:border-red-900'
+                : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 border-gray-200 dark:border-gray-700/60 hover:border-red-300 dark:hover:border-red-800',
+            ].join(' ')}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
+    </ModalShell>
+  )
+}
+
+// ─── Modals ───────────────────────────────────────────────────────────────────
 
 function ModalShell({ title, subtitle, onClose, children, footer, maxWidth = 'max-w-2xl' }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
-      <div className={`relative w-full ${maxWidth} max-h-[90vh] flex flex-col rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl`} onClick={(e) => e.stopPropagation()}>
+      <div
+        className={`relative w-full ${maxWidth} max-h-[90vh] flex flex-col rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl`}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 flex items-center justify-between shrink-0">
           <div>
             <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
             {subtitle && <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">{subtitle}</p>}
           </div>
-          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"><Icon name="x" size={16} /></button>
+          <button onClick={onClose} className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700">
+            <Icon name="x" size={16} />
+          </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">{children}</div>
-        {footer && <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700/60 shrink-0">{footer}</div>}
+        {footer && (
+          <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700/60 shrink-0">{footer}</div>
+        )}
       </div>
     </div>
   )
 }
 
-function StartObservationModal({ onClose, onSubmit, loading, patientName }) {
-  const [type, setType] = useState('observation')
-  const [reason, setReason] = useState('')
-  const [deposit, setDeposit] = useState('')
-  const [expectedDischarge, setExpectedDischarge] = useState('')
-
-  const handleSubmit = () => {
-    if (!reason.trim()) { toast.error('Reason is required'); return }
-    onSubmit({ admission_type: type, reason: reason.trim(), deposit: Number(deposit) || 0, expected_discharge: expectedDischarge || null })
-  }
-
-  return (
-    <ModalShell title="Start Observation" subtitle={patientName} onClose={onClose}
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} disabled={loading} className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400">Cancel</button>
-          <button onClick={handleSubmit} disabled={loading} className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-1.5 disabled:opacity-50">{loading ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="check" size={12} />} Start Observation</button>
-        </div>
-      }>
-      <div className="space-y-3">
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Admission Type</label>
-          <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
-            {ADMISSION_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Reason for Observation *</label>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="e.g. Post-procedure monitoring" className={`${inputCls} resize-none`} />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Deposit (KSh)</label>
-            <input type="number" min="0" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="0" className={inputCls} />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Expected Discharge</label>
-            <input type="datetime-local" value={expectedDischarge} onChange={(e) => setExpectedDischarge(e.target.value)} className={inputCls} />
-          </div>
-        </div>
-      </div>
-    </ModalShell>
-  )
-}
-
-function DischargeModal({ onClose, onSubmit, loading, admission }) {
-  const [notes, setNotes] = useState('')
-
-  return (
-    <ModalShell title="Discharge from Observation" subtitle={`Admitted ${timeAgo(admission.admitted_at)}`} onClose={onClose} maxWidth="max-w-md"
-      footer={
-        <div className="flex items-center justify-end gap-2">
-          <button onClick={onClose} disabled={loading} className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400">Cancel</button>
-          <button onClick={() => onSubmit({ discharge_notes: notes.trim() })} disabled={loading} className="px-3 py-1.5 rounded-lg text-[12px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 disabled:opacity-50">{loading ? <Icon name="refresh" size={12} className="animate-spin" /> : <Icon name="archive" size={12} />} Discharge</button>
-        </div>
-      }>
-      <div className="space-y-3">
-        <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2">
-          <p className="text-[12px] text-gray-600 dark:text-gray-300">Deposit: <span className="font-semibold">{formatMoney(admission.deposit)}</span></p>
-          {admission.expected_discharge && <p className="text-[12px] text-gray-600 dark:text-gray-300 mt-0.5">Expected: {formatDateTime(admission.expected_discharge)}</p>}
-        </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Discharge Notes</label>
-          <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3} placeholder="Discharge instructions, follow-up plan..." className={`${inputCls} resize-none`} />
-        </div>
-        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 px-3 py-2 flex items-start gap-2">
-          <Icon name="info" size={13} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-blue-700 dark:text-blue-400">Discharging will add an observation fee to the bill and free the patient for billing. The doctor must still click &quot;End Consultation&quot; to finalize.</p>
-        </div>
-      </div>
-    </ModalShell>
-  )
-}
-
+// Lab order modal — fetches the real catalog from the DB and submits test ids.
 function LabOrderModal({ onClose, onSubmit, loading }) {
-  const [selected, setSelected] = useState({})
+  const [selected, setSelected] = useState({}) // catalog id → true
   const [urgency, setUrgency] = useState('routine')
 
-  // Mock catalog for preview
-  const tests = [
-    { id: 1, name: 'Full Blood Count', category: 'hematology', unit_cost: 800, reference_range: 'Hb 12-17 g/dL' },
-    { id: 2, name: 'ESR', category: 'hematology', unit_cost: 400, reference_range: '0-20 mm/hr' },
-    { id: 3, name: 'Random Blood Glucose', category: 'chemistry', unit_cost: 500, reference_range: '3.9-7.8 mmol/L' },
-    { id: 4, name: 'Urinalysis', category: 'urinalysis', unit_cost: 300, reference_range: 'Negative' },
-    { id: 5, name: 'Liver Function Test', category: 'chemistry', unit_cost: 1800, reference_range: 'ALT 7-56 U/L' },
-  ]
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['doctor', 'lab-catalog'],
+    queryFn: () => api.get('/api/doctor/lab-catalog'),
+    staleTime: 5 * 60 * 1000, // catalog rarely changes within a shift
+  })
+  const tests = data?.tests || []
 
-  const toggle = (id) => setSelected((s) => ({ ...s, [id]: !s[id] }))
+  const toggle = (t) => setSelected((s) => ({ ...s, [t.id]: !s[t.id] }))
   const selectedTests = tests.filter((t) => selected[t.id])
+  const selectedIds = selectedTests.map((t) => t.id)
   const totalCost = selectedTests.reduce((s, t) => s + (t.unit_cost || 0), 0)
 
+  const footer = (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+          {selectedIds.length} test{selectedIds.length !== 1 ? 's' : ''} selected
+        </span>
+        <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
+          {formatMoney(totalCost)}
+        </span>
+      </div>
+      <button
+        onClick={() => onSubmit(selectedIds, urgency)}
+        disabled={loading || selectedIds.length === 0}
+        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50"
+      >
+        {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />}
+        Order Tests
+      </button>
+    </div>
+  )
+
   return (
-    <ModalShell title="Order Lab Tests" subtitle="Select tests and set urgency" onClose={onClose}
-      footer={
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] text-gray-500 dark:text-gray-400">{selectedTests.length} test(s)</span>
-            <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(totalCost)}</span>
-          </div>
-          <button onClick={() => onSubmit(selectedTests.map((t) => t.id), urgency)} disabled={loading || selectedTests.length === 0} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">{loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />} Order</button>
-        </div>
-      }>
+    <ModalShell
+      title="Order Lab Tests"
+      subtitle="Select tests from the catalog and set urgency"
+      onClose={onClose}
+      footer={footer}
+    >
+      {/* Urgency selector */}
       <div className="mb-4">
         <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Urgency</label>
         <div className="grid grid-cols-3 gap-2">
-          {[{v:'routine',l:'Routine'},{v:'urgent',l:'Urgent'},{v:'stat',l:'STAT'}].map((u) => (
-            <button key={u.v} onClick={() => setUrgency(u.v)} className={`px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors ${urgency === u.v ? 'bg-[#1a6cbf] text-white' : 'bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700/60'}`}>{u.l}</button>
+          {URGENCY_OPTIONS.map((u) => (
+            <button
+              key={u.value}
+              type="button"
+              onClick={() => setUrgency(u.value)}
+              className={[
+                'px-3 py-2 rounded-lg text-[12px] font-semibold transition-colors',
+                urgency === u.value
+                  ? 'bg-[#1a6cbf] text-white'
+                  : 'bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700/60',
+              ].join(' ')}
+            >
+              {u.label}
+            </button>
           ))}
         </div>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {tests.map((t) => {
-          const isSel = !!selected[t.id]
-          return (
-            <button key={t.id} onClick={() => toggle(t.id)} className={`text-left p-3 rounded-lg border transition-all ${isSel ? 'border-[#1a6cbf] bg-blue-50 dark:bg-blue-950/30' : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700'}`}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">{t.name}</p>
-                  <p className="text-[10px] text-gray-400 mt-0.5">{cap(t.category)} · Ref: {t.reference_range}</p>
+
+      {/* Test catalog */}
+      <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+        Available Tests
+      </label>
+
+      {isLoading ? (
+        <p className="text-[12px] text-gray-400 py-6 text-center">Loading test catalog…</p>
+      ) : error ? (
+        <p className="text-[12px] text-red-500 py-6 text-center">Could not load lab tests. {error.message}</p>
+      ) : tests.length === 0 ? (
+        <p className="text-[12px] text-gray-400 py-6 text-center">No active lab tests in the catalog.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          {tests.map((t) => {
+            const isSel = !!selected[t.id]
+            return (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => toggle(t)}
+                className={[
+                  'text-left p-3 rounded-lg border transition-all',
+                  isSel
+                    ? 'border-[#1a6cbf] bg-blue-50 dark:bg-blue-950/30'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700',
+                ].join(' ')}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">{t.name}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">{t.category ? cap(t.category) : 'Uncategorised'}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 tabular-nums">{formatMoney(t.unit_cost)}</span>
+                    <span className={[
+                      'w-5 h-5 rounded-md border flex items-center justify-center transition-colors',
+                      isSel ? 'bg-[#1a6cbf] border-[#1a6cbf] text-white' : 'border-gray-300 dark:border-gray-600 text-transparent',
+                    ].join(' ')}>
+                      <Icon name="check" size={12} />
+                    </span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 tabular-nums">{formatMoney(t.unit_cost)}</span>
-                  <span className={`w-5 h-5 rounded-md border flex items-center justify-center transition-colors ${isSel ? 'bg-[#1a6cbf] border-[#1a6cbf] text-white' : 'border-gray-300 dark:border-gray-600 text-transparent'}`}><Icon name="check" size={12} /></span>
-                </div>
-              </div>
-            </button>
-          )
-        })}
-      </div>
+                {t.reference_range && (
+                  <p className="text-[10px] text-gray-400 mt-1.5">Ref: {t.reference_range}</p>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </ModalShell>
   )
 }
 
 function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
-  const [items, setItems] = useState([{ medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null }])
+  const [items, setItems] = useState([
+    { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '' },
+  ])
 
-  const updateItem = (i, field, value) => setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [field]: value } : it))
-  const addItem = () => setItems((arr) => [...arr, { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null }])
+  // Drug stock from pharmacy — live stock + clinic price at the point of prescribing.
+  const { data: drugsData } = useQuery({
+    queryKey: ['pharmacy', 'drugs'],
+    queryFn: () => api.get('/api/pharmacy/drugs'),
+    staleTime: 30000,
+  })
+  const drugs = drugsData?.items || []
+  const markupPct = drugsData?.markup_pct ?? null
+
+  // Parse allergies into lowercase keywords for matching
+  const allergyKeywords = (allergies || '')
+    .split(/[,;]/)
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+
+  function checkAllergy(drugName, genericName) {
+    if (!allergyKeywords.length) return null
+    const name = (drugName || '').toLowerCase()
+    const generic = (genericName || '').toLowerCase()
+    for (const kw of allergyKeywords) {
+      if (name.includes(kw) || generic.includes(kw)) {
+        return kw
+      }
+    }
+    return null
+  }
+
+  const updateItem = (i, field, value) => {
+    setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [field]: value } : it))
+  }
+
+  // Drug picked from search — auto-fill medication, form, clinic price.
+  // Injectables: flat KSh 500 fee default (editable); oral: clinic unit_price.
+  //
+  // FIX (controlled-input): drug.unit_price is a COMPUTED field the pharmacy
+  // endpoint must supply (DrugStock has no unit_price column — it has
+  // unit_cost/normal_price/promotional_price/wholesale_price). If the endpoint
+  // returns raw rows, unit_price is undefined and would flip the controlled
+  // unit-cost input to uncontrolled. Fallback chain keeps the value defined:
+  // computed clinic price → un-marked-up normal_price → 0. NOTE: the fallback
+  // bills at normal_price (no markup) — the real fix is the pharmacy
+  // controller emitting unit_price/pharmacy_normal_price/markup_pct.
+  const selectDrug = (i, drug) => {
+    const isInj = drug.form === 'injection'
+    const clinicPrice = drug.unit_price ?? drug.normal_price ?? 0
+    setItems((arr) => arr.map((it, idx) => idx === i ? {
+      ...it,
+      medication: drug.name ?? '',
+      form: isInj ? 'injection' : 'oral',
+      unit_cost: isInj ? 500 : clinicPrice,
+      drug_id: drug.id,
+      _stock: drug.current_stock ?? null,
+      _reorder_level: drug.reorder_level ?? null,
+      _pharmacy_normal_price: drug.pharmacy_normal_price ?? drug.normal_price ?? null,
+      _unit: drug.unit ?? '',
+      _allergy_hit: checkAllergy(drug.name, drug.generic_name),
+    } : it))
+  }
+
+  // Toggle Oral / Injection — resets the selection since the drug list changes.
+  const setForm = (i, form) => {
+    setItems((arr) => arr.map((it, idx) => {
+      if (idx !== i) return it
+      const updated = { ...it, form, medication: '', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '', _allergy_hit: null }
+      updated.unit_cost = form === 'injection' ? 500 : 0
+      return updated
+    }))
+  }
+
+  const addItem = () => setItems((arr) => [...arr, { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '' }])
   const removeItem = (i) => setItems((arr) => arr.filter((_, idx) => idx !== i))
 
   const totalCost = items.reduce((s, it) => s + (parseFloat(it.unit_cost) || 0) * (parseInt(it.quantity) || 0), 0)
-  const validItems = items.filter((it) => it.medication.trim())
+
+  // Strip ONLY the _-prefixed UI fields. form and drug_id go to the API —
+  // drug_id is what lets the pharmacist restock the exact drug on return.
+  const validItems = items
+    .filter((it) => it.medication.trim() && !it._allergy_hit)
+    .map(({ _stock, _reorder_level, _pharmacy_normal_price, _unit, _allergy_hit, ...rest }) => rest)
+
+  const hasAllergyConflict = items.some((it) => it._allergy_hit)
+
+  const footer = (
+    <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center gap-3">
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+          {validItems.length} medication{validItems.length !== 1 ? 's' : ''} · total
+        </span>
+        <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(totalCost)}</span>
+      </div>
+      <button
+        onClick={() => onSubmit(validItems)}
+        disabled={loading || validItems.length === 0 || hasAllergyConflict}
+        title={hasAllergyConflict ? 'Remove the allergy-conflicting medication to proceed' : undefined}
+        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />}
+        Send to Pharmacy
+      </button>
+    </div>
+  )
 
   return (
-    <ModalShell title="Add Prescription" subtitle="Enter medications and dosages" onClose={onClose}
-      footer={
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <span className="text-[11px] text-gray-500 dark:text-gray-400">{validItems.length} medication(s)</span>
-            <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(totalCost)}</span>
-          </div>
-          <button onClick={() => onSubmit(validItems)} disabled={loading || validItems.length === 0} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">{loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />} Send to Pharmacy</button>
-        </div>
-      }>
+    <ModalShell
+      title="Add Prescription"
+      subtitle={`Search the pharmacy drug stock — clinic price${markupPct != null ? ` (${markupPct}%)` : ''} is auto-applied`}
+      onClose={onClose}
+      footer={footer}
+    >
       <div className="space-y-4">
-        {allergies && (
+        {allergyKeywords.length > 0 && (
           <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 px-3 py-2 flex items-start gap-2">
             <Icon name="alert" size={13} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-            <p className="text-[11px] text-red-700 dark:text-red-400"><span className="font-semibold">Allergy alert:</span> {allergies}</p>
+            <p className="text-[11px] text-red-700 dark:text-red-400">
+              <span className="font-semibold">Patient allergy alert:</span> {allergies}. Drugs matching these allergens will be flagged and blocked from prescription.
+            </p>
           </div>
         )}
-        {items.map((it, i) => (
-          <div key={i} className="rounded-lg border border-gray-200 dark:border-gray-700/60 p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">Medication #{i + 1}</span>
-              {items.length > 1 && <button onClick={() => removeItem(i)} className="text-[11px] text-red-500 hover:text-red-600 flex items-center gap-1"><Icon name="trash" size={12} /> Remove</button>}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div className="sm:col-span-2">
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Medication *</label>
-                <input type="text" value={it.medication} onChange={(e) => updateItem(i, 'medication', e.target.value)} placeholder="e.g. Paracetamol" className={inputCls} />
+        {items.map((it, i) => {
+          const stock = it._stock
+          const reorder = it._reorder_level
+          const qty = parseInt(it.quantity) || 0
+          const outOfStock = it.drug_id != null && stock === 0
+          const exceedsStock = it.drug_id != null && stock > 0 && qty > stock
+          const allergyHit = it._allergy_hit
+          return (
+            <div key={i} className={`rounded-lg border p-3 ${allergyHit ? 'border-red-300 dark:border-red-900/60 bg-red-50/30 dark:bg-red-950/10' : 'border-gray-200 dark:border-gray-700/60'}`}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  Medication #{i + 1}
+                  {allergyHit && (
+                    <span className="ml-2 text-red-600 dark:text-red-400 normal-case tracking-normal font-bold">
+                      ⚠ ALLERGY CONFLICT
+                    </span>
+                  )}
+                </span>
+                {items.length > 1 && (
+                  <button
+                    onClick={() => removeItem(i)}
+                    className="text-[11px] text-red-500 hover:text-red-600 dark:text-red-400 flex items-center gap-1"
+                  >
+                    <Icon name="trash" size={12} /> Remove
+                  </button>
+                )}
               </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Dosage</label>
-                <input type="text" value={it.dosage} onChange={(e) => updateItem(i, 'dosage', e.target.value)} placeholder="e.g. 1g" className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Frequency</label>
-                <input type="text" value={it.frequency} onChange={(e) => updateItem(i, 'frequency', e.target.value)} placeholder="e.g. TID" className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Duration</label>
-                <input type="text" value={it.duration} onChange={(e) => updateItem(i, 'duration', e.target.value)} placeholder="e.g. 3 days" className={inputCls} />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Quantity</label>
-                <input type="number" min="1" value={it.quantity} onChange={(e) => updateItem(i, 'quantity', e.target.value)} className={inputCls} />
-              </div>
-              <div className="sm:col-span-2">
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Unit Cost (KSh)</label>
-                <input type="number" min="0" value={it.unit_cost} onChange={(e) => updateItem(i, 'unit_cost', e.target.value)} className={`${inputCls} tabular-nums`} />
-              </div>
-            </div>
-          </div>
-        ))}
-        <button onClick={addItem} className="w-full px-4 py-2 rounded-lg text-[13px] font-medium border border-dashed border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] flex items-center justify-center gap-2"><Icon name="plus" size={14} /> Add Another</button>
-      </div>
-    </ModalShell>
-  )
-}
 
-function ReportModal({ visit, onClose }) {
-  const admission = visit.admission
-  return (
-    <ModalShell title="Medical Report" subtitle={`${visit.patient_name} · Visit #${visit.id}`} onClose={onClose} maxWidth="max-w-3xl">
-      <div className="space-y-4">
-        {/* Header */}
-        <div className="border-b border-gray-200 dark:border-gray-700 pb-3">
-          <h2 className="text-[16px] font-bold text-gray-900 dark:text-gray-100">{visit.patient_name}</h2>
-          <p className="text-[12px] text-gray-500 dark:text-gray-400">{visit.patient_age} years · {cap(visit.patient_gender)} · Blood group {visit.blood_group || '—'}</p>
-          {visit.allergies && <p className="text-[12px] text-red-600 dark:text-red-400 mt-1">Allergies: {visit.allergies}</p>}
-        </div>
-
-        {/* Admission info */}
-        {admission && (
-          <div className="rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-200 dark:border-gray-700 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1">Observation Record</p>
-            <p className="text-[12px] text-gray-700 dark:text-gray-300">Type: {cap(admission.admission_type)} · Admitted: {formatDateTime(admission.admitted_at)}</p>
-            {admission.discharged_at && <p className="text-[12px] text-gray-700 dark:text-gray-300">Discharged: {formatDateTime(admission.discharged_at)} · {admission.days_admitted} day(s)</p>}
-            <p className="text-[12px] text-gray-700 dark:text-gray-300">Reason: {admission.reason}</p>
-            {admission.discharge_notes && <p className="text-[12px] text-gray-700 dark:text-gray-300 mt-1">Discharge notes: {admission.discharge_notes}</p>}
-          </div>
-        )}
-
-        {/* SOAP */}
-        <div className="space-y-2">
-          {visit.subjective && <div><span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase">Subjective:</span><p className="text-[12px] text-gray-800 dark:text-gray-200 mt-0.5">{visit.subjective}</p></div>}
-          {visit.objective && <div><span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase">Objective:</span><p className="text-[12px] text-gray-800 dark:text-gray-200 mt-0.5">{visit.objective}</p></div>}
-          {visit.assessment && <div><span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase">Assessment:</span><p className="text-[12px] text-gray-800 dark:text-gray-200 mt-0.5">{visit.assessment}</p></div>}
-          {visit.plan && <div><span className="text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase">Plan:</span><p className="text-[12px] text-gray-800 dark:text-gray-200 mt-0.5">{visit.plan}</p></div>}
-        </div>
-
-        {/* Diagnosis */}
-        {visit.diagnosis && (
-          <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 p-3">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Diagnosis</p>
-            <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 mt-0.5">{visit.diagnosis} {visit.diagnosis_code && <span className="text-[11px] text-gray-500">({visit.diagnosis_code})</span>}</p>
-          </div>
-        )}
-
-        {/* Labs */}
-        {visit.lab_requests?.length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Lab Results</p>
-            <div className="space-y-1.5">
-              {visit.lab_requests.flatMap((r) => r.items).map((it) => (
-                <div key={it.id} className="flex items-center justify-between text-[12px] px-2 py-1.5 rounded bg-gray-50 dark:bg-gray-700/20">
-                  <span className="text-gray-700 dark:text-gray-300">{it.test_name}</span>
-                  <span className={it.flagged ? 'font-bold text-red-600 dark:text-red-400' : 'font-medium text-emerald-600 dark:text-emerald-400'}>{it.result || 'Pending'}</span>
+              {/* Oral / Injection type toggle */}
+              <div className="mb-2">
+                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Type</label>
+                <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setForm(i, 'oral')}
+                    className={[
+                      'px-3 py-1.5 text-[12px] font-medium flex items-center gap-1.5 transition-colors',
+                      it.form !== 'injection'
+                        ? 'bg-[#1a6cbf] text-white'
+                        : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20',
+                    ].join(' ')}
+                  >
+                    <Icon name="pill" size={12} /> Oral
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setForm(i, 'injection')}
+                    className={[
+                      'px-3 py-1.5 text-[12px] font-medium flex items-center gap-1.5 transition-colors border-l border-gray-200 dark:border-gray-700/60',
+                      it.form === 'injection'
+                        ? 'bg-fuchsia-600 text-white'
+                        : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20',
+                    ].join(' ')}
+                  >
+                    <Icon name="syringe" size={12} /> Injection
+                  </button>
                 </div>
-              ))}
-            </div>
-          </div>
-        )}
+                {it.form === 'injection' && (
+                  <p className="text-[10px] text-fuchsia-600 dark:text-fuchsia-400 mt-1">
+                    Injectable medications are charged at a flat fee of KSh 500 (editable). Select the injectable drug below.
+                  </p>
+                )}
+              </div>
 
-        {/* Prescriptions */}
-        {visit.prescriptions?.length > 0 && (
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Prescriptions</p>
-            <div className="space-y-1.5">
-              {visit.prescriptions.flatMap((p) => p.items).map((it) => (
-                <div key={it.id} className="flex items-center justify-between text-[12px] px-2 py-1.5 rounded bg-gray-50 dark:bg-gray-700/20">
-                  <span className="text-gray-700 dark:text-gray-300">{it.medication} {it.dosage} {it.frequency} × {it.duration}</span>
-                  <span className="text-gray-500 dark:text-gray-400">Qty {it.quantity}</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Medication *</label>
+                  <DrugSearchInput
+                    value={it.medication}
+                    drugs={drugs}
+                    formFilter={it.form}
+                    onChange={(v) => updateItem(i, 'medication', v)}
+                    onSelect={(drug) => selectDrug(i, drug)}
+                  />
+                  {/* Allergy conflict — highest priority */}
+                  {allergyHit && (
+                    <div className="mt-2 rounded-lg bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 px-3 py-2 flex items-start gap-2">
+                      <Icon name="xCircle" size={14} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-[12px] font-semibold text-red-700 dark:text-red-400">
+                          ALLERGY CONFLICT — "{allergyHit}"
+                        </p>
+                        <p className="text-[11px] text-red-600 dark:text-red-400 mt-0.5">
+                          This patient is allergic to <span className="font-semibold">{allergyHit}</span>. Select a different medication or remove this item. The prescription cannot be sent while this conflict exists.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  {/* Stock badge + price breakdown once a drug is selected */}
+                  {it.drug_id != null && !allergyHit && (
+                    <div className="mt-2 space-y-1.5 rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2">
+                      <div className="flex items-center gap-2 flex-wrap text-[10px]">
+                        <StockPill stock={stock} reorder={reorder} />
+                        <span className="text-gray-500 dark:text-gray-400">
+                          Pharmacy price: <span className="tabular-nums">{formatMoney(it._pharmacy_normal_price ?? 0)}</span>
+                          {' · '}
+                          Clinic price{markupPct != null ? ` (${markupPct}%)` : ''}: <span className="font-semibold text-[#1a6cbf] dark:text-blue-400 tabular-nums">{formatMoney(it.unit_cost ?? 0)}</span>
+                        </span>
+                      </div>
+                      {outOfStock && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400 font-semibold">
+                          <Icon name="xCircle" size={12} /> OUT OF STOCK — select an alternative or restock
+                        </div>
+                      )}
+                      {exceedsStock && (
+                        <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                          <Icon name="alert" size={12} />
+                          Requested quantity ({qty}) exceeds current stock ({stock}). Pharmacy will partially dispense.
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              ))}
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Dosage</label>
+                  <input
+                    type="text"
+                    value={it.dosage ?? ''}
+                    onChange={(e) => updateItem(i, 'dosage', e.target.value)}
+                    placeholder="e.g. 500mg"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Frequency</label>
+                  <input
+                    type="text"
+                    value={it.frequency ?? ''}
+                    onChange={(e) => updateItem(i, 'frequency', e.target.value)}
+                    placeholder="e.g. 3x daily"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Duration</label>
+                  <input
+                    type="text"
+                    value={it.duration ?? ''}
+                    onChange={(e) => updateItem(i, 'duration', e.target.value)}
+                    placeholder="e.g. 7 days"
+                    className={inputCls}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Quantity</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={it.quantity ?? ''}
+                    onChange={(e) => updateItem(i, 'quantity', e.target.value)}
+                    className={inputCls}
+                  />
+                </div>
+                <div className="sm:col-span-2">
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                    {it.form === 'injection'
+                      ? 'Injection Fee (KSh) — default 500, editable'
+                      : 'Unit Cost (KSh) — auto-filled from clinic price'}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={it.unit_cost ?? ''}
+                    onChange={(e) => updateItem(i, 'unit_cost', e.target.value)}
+                    placeholder="0"
+                    className={`${inputCls} tabular-nums`}
+                  />
+                </div>
+              </div>
             </div>
-          </div>
-        )}
+          )
+        })}
 
-        {/* Bill summary */}
-        <div className="border-t border-gray-200 dark:border-gray-700 pt-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Bill Summary</p>
-          <div className="space-y-1 text-[12px]">
-            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Consultation</span><span className="tabular-nums">{formatMoney(visit.consultation_fee)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Lab</span><span className="tabular-nums">{formatMoney(visit.lab_fee)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Medications</span><span className="tabular-nums">{formatMoney(visit.medication_fee)}</span></div>
-            <div className="flex justify-between"><span className="text-gray-600 dark:text-gray-400">Procedures / Observation</span><span className="tabular-nums">{formatMoney(visit.procedure_fee)}</span></div>
-            {admission?.deposit > 0 && <div className="flex justify-between text-gray-500 dark:text-gray-400"><span>Less: Deposit</span><span className="tabular-nums">-{formatMoney(admission.deposit)}</span></div>}
-            <div className="flex justify-between text-[13px] font-bold text-gray-900 dark:text-gray-100 pt-1 border-t border-gray-100 dark:border-gray-700/40">
-              <span>Total</span>
-              <span className="tabular-nums">{formatMoney((visit.bill_total || 0) - (admission?.deposit || 0))}</span>
-            </div>
-          </div>
-        </div>
-
-        <button onClick={() => window.print()} className="w-full px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center justify-center gap-2">
-          <Icon name="printer" size={14} /> Print
+        <button
+          onClick={addItem}
+          className="w-full px-4 py-2 rounded-lg text-[13px] font-medium border border-dashed border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center justify-center gap-2"
+        >
+          <Icon name="plus" size={14} /> Add Another Medication
         </button>
       </div>
     </ModalShell>
   )
 }
 
-function ProcedureModal({ onClose, onConfirm }) {
-  const [type, setType] = useState('procedure')
-  const [name, setName] = useState('')
+// ─── Drug search dropdown (used inside PrescriptionModal) ────────────────────
+
+function DrugSearchInput({ value, drugs, onChange, onSelect, formFilter }) {
+  const [focused, setFocused] = useState(false)
+
+  // Filter by form type (oral vs injection) when a formFilter is set
+  const formFiltered = formFilter === 'injection'
+    ? drugs.filter((d) => d.form === 'injection')
+    : formFilter === 'oral'
+      ? drugs.filter((d) => d.form !== 'injection')
+      : drugs
+
+  // Guards: value/generic_name can be undefined if an API row is malformed —
+  // .trim()/.toLowerCase() on undefined would CRASH the modal, not just warn.
+  const query = (value || '').trim().toLowerCase()
+  const filtered = query
+    ? formFiltered.filter((d) =>
+        (d.name || '').toLowerCase().includes(query) ||
+        (d.generic_name || '').toLowerCase().includes(query)
+      ).slice(0, 8)
+    : formFiltered.slice(0, 8)
+
+  const placeholder = formFilter === 'injection'
+    ? 'Search injectable medications (e.g. Ceftriaxone)…'
+    : 'Search drug name or generic (e.g. Amoxicillin)…'
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        value={value ?? ''}
+        onChange={(e) => onChange(e.target.value)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setTimeout(() => setFocused(false), 150)}
+        placeholder={placeholder}
+        className={inputCls}
+        autoComplete="off"
+      />
+      {focused && filtered.length > 0 && (
+        <div className="absolute z-30 mt-1 w-full max-h-60 overflow-y-auto rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg">
+          {filtered.map((d) => (
+            <button
+              key={d.id}
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); onSelect(d); setFocused(false) }}
+              className="w-full text-left px-3 py-2 hover:bg-blue-50 dark:hover:bg-blue-950/30 transition-colors border-b border-gray-100 dark:border-gray-700/40 last:border-0"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-[12px] font-medium text-gray-900 dark:text-gray-100 truncate">{d.name}</p>
+                  <p className="text-[10px] text-gray-400">
+                    {d.generic_name || '—'} · {cap(d.category || 'uncategorised')} · {d.form || ''} {d.strength || ''}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 tabular-nums">
+                    {formatMoney(d.unit_price ?? d.normal_price ?? 0)}
+                  </span>
+                  <StockPill stock={d.current_stock} reorder={d.reorder_level} />
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+      {focused && filtered.length === 0 && query && (
+        <div className="absolute z-30 mt-1 w-full rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg px-3 py-2">
+          <p className="text-[11px] text-gray-400">No matching drug in stock. You may still type a custom medication.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StockPill({ stock, reorder }) {
+  const s = stock ?? 0
+  const r = reorder ?? 0
+  const cls = s === 0
+    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+    : s <= r
+      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+      : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+  const label = s === 0 ? 'OUT' : s <= r ? 'LOW' : 'IN STOCK'
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${cls}`}>
+      <Icon name="box" size={10} /> {label} {s}
+    </span>
+  )
+}
+
+// ─── ProcedureModal — doctor selects a procedure/FP method to add to the bill ─
+
+function ProcedureModal({ loading, onClose, onConfirm }) {
+  const [procedureType, setProcedureType] = useState('procedure')
+  const [procedureId, setProcedureId] = useState('')
   const [price, setPrice] = useState('')
   const [notes, setNotes] = useState('')
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (!name.trim() || !price) return
-    onConfirm(type, null, notes.trim(), Number(price))
+  const { data: proceduresData } = useQuery({
+    queryKey: ['procedures'],
+    queryFn: () => api.get('/api/procedures'),
+    staleTime: 60000,
+  })
+  const procedures = proceduresData?.procedures || []
+  const fpMethods = proceduresData?.familyPlanningMethods || []
+
+  const items = procedureType === 'family_planning' ? fpMethods : procedures
+  const selectedItem = items.find((it) => it.id === Number(procedureId))
+
+  const handleSelectProcedure = (e) => {
+    const id = e.target.value
+    setProcedureId(id)
+    const matched = items.find((it) => it.id === Number(id))
+    // Guard: a malformed catalog row without price would set the literal
+    // string "undefined" into the controlled price input.
+    if (matched) setPrice(String(matched.price ?? 0))
   }
 
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [loading, onClose])
+
+  const handleSubmit = (e) => {
+    e.preventDefault()
+    if (!procedureId || loading) return
+    onConfirm(procedureType, procedureId, notes.trim(), Number(price) || 0)
+  }
+
+  const isPriceEdited = selectedItem && Number(price) !== selectedItem.price
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !loading && onClose()}>
       <div className="relative w-full max-w-md rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 flex items-center justify-between">
-          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Add Procedure / Service</h3>
-          <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"><Icon name="x" size={16} /></button>
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-[#1a6cbf]/10 text-[#1a6cbf] dark:bg-blue-900/40 dark:text-blue-400 flex items-center justify-center"><Icon name="stethoscope" size={16} /></div>
+            <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Add Procedure / Service</h3>
+          </div>
+          <button onClick={onClose} disabled={loading} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40 disabled:opacity-50"><Icon name="x" size={16} /></button>
         </div>
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden w-full">
-            <button type="button" onClick={() => setType('procedure')} className={`flex-1 px-3 py-2 text-[13px] font-medium transition-colors ${type !== 'family_planning' ? 'bg-[#1a6cbf] text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400'}`}>Procedure</button>
-            <button type="button" onClick={() => setType('family_planning')} className={`flex-1 px-3 py-2 text-[13px] font-medium transition-colors border-l border-gray-200 dark:border-gray-700/60 ${type === 'family_planning' ? 'bg-fuchsia-600 text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400'}`}>Family Planning</button>
+          <div>
+            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Type</label>
+            <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden w-full">
+              <button type="button" onClick={() => { setProcedureType('procedure'); setProcedureId(''); setPrice('') }} className={['flex-1 px-3 py-2 text-[13px] font-medium transition-colors', procedureType !== 'family_planning' ? 'bg-[#1a6cbf] text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20'].join(' ')}>Procedure</button>
+              <button type="button" onClick={() => { setProcedureType('family_planning'); setProcedureId(''); setPrice('') }} className={['flex-1 px-3 py-2 text-[13px] font-medium transition-colors border-l border-gray-200 dark:border-gray-700/60', procedureType === 'family_planning' ? 'bg-fuchsia-600 text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20'].join(' ')}>Family Planning</button>
+            </div>
           </div>
           <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Name *</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wound dressing" className={inputCls} required />
+            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">{procedureType === 'family_planning' ? 'Family Planning Method' : 'Procedure'} *</label>
+            <select value={procedureId} onChange={handleSelectProcedure} className="w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf] cursor-pointer">
+              <option value="">Select…</option>
+              {items.map((it) => (<option key={it.id} value={it.id}>{it.name} — {formatMoney(it.price)}</option>))}
+            </select>
           </div>
+          {selectedItem && (
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Price (KSh) {isPriceEdited && <span className="text-amber-500 normal-case tracking-normal">· edited (default {formatMoney(selectedItem.price)})</span>}</label>
+              <input type="number" min="0" step="any" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full px-3 py-2 text-[15px] font-semibold rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]" />
+              {isPriceEdited && <button type="button" onClick={() => setPrice(String(selectedItem.price ?? 0))} className="text-[10px] text-[#1a6cbf] dark:text-blue-400 hover:underline mt-1">Reset to default ({formatMoney(selectedItem.price)})</button>}
+            </div>
+          )}
           <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Price (KSh) *</label>
-            <input type="number" min="0" value={price} onChange={(e) => setPrice(e.target.value)} className={`${inputCls} tabular-nums`} required />
+            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Notes (optional)</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. Injection administered in left deltoid" className={`${inputCls} resize-none`} />
           </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">Notes</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={`${inputCls} resize-none`} />
+          <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 px-3 py-2 flex items-start gap-2">
+            <Icon name="info" size={13} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-blue-700 dark:text-blue-400">The fee is added to the bill. Use <span className="font-semibold">End Consultation</span> to send the patient to the billing desk when all services are complete.</p>
           </div>
           <div className="flex items-center gap-2 pt-1">
-            <button type="button" onClick={onClose} className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400">Cancel</button>
-            <button type="submit" className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center justify-center gap-2"><Icon name="plus" size={14} /> Add to Bill</button>
+            <button type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 disabled:opacity-50">Cancel</button>
+            <button type="submit" disabled={loading || !procedureId} className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">{loading ? <Spinner size={13} /> : <Icon name="plus" size={14} />} Add to Bill</button>
           </div>
         </form>
       </div>

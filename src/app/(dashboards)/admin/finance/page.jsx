@@ -497,14 +497,15 @@ function OutstandingBalancesCard() {
   })
 
   const mut = useMutation({
-    mutationFn: ({ visitId, body }) => api.patch(`/api/admin/outstanding-balances/${visitId}`, body),
-    onMutate: async ({ visitId, body }) => {
+    mutationFn: ({ entityId, source, body }) =>
+      api.patch(`/api/admin/outstanding-balances/${entityId}`, { ...body, source }),
+    onMutate: async ({ entityId, source, body }) => {
       await queryClient.cancelQueries({ queryKey })
       const prev = queryClient.getQueryData(queryKey)
       queryClient.setQueryData(queryKey, (old) => {
         if (!old || !Array.isArray(old.outstanding)) return old
         const updated = old.outstanding.map((r) => {
-          if (r.visit_id !== visitId) return r
+          if (r.entity_id !== entityId || r.source !== source) return r
           if (body.action === 'settle') {
             const amt = Number(body.amount) || 0
             const newPaid = (r.paid_amount || 0) + amt
@@ -540,11 +541,17 @@ function OutstandingBalancesCard() {
           if (!old || !Array.isArray(old.outstanding)) return old
           let outstanding
           if (serverRow.balance <= 0) {
-            outstanding = old.outstanding.filter((r) => r.visit_id !== serverRow.visit_id)
+            outstanding = old.outstanding.filter(
+              (r) => !(r.entity_id === serverRow.entity_id && r.source === serverRow.source)
+            )
           } else {
-            const exists = old.outstanding.some((r) => r.visit_id === serverRow.visit_id)
+            const exists = old.outstanding.some(
+              (r) => r.entity_id === serverRow.entity_id && r.source === serverRow.source
+            )
             outstanding = exists
-              ? old.outstanding.map((r) => (r.visit_id === serverRow.visit_id ? serverRow : r))
+              ? old.outstanding.map((r) =>
+                  r.entity_id === serverRow.entity_id && r.source === serverRow.source ? serverRow : r
+                )
               : [serverRow, ...old.outstanding]
           }
           const totalOutstanding = outstanding.reduce((s, r) => s + r.balance, 0)
@@ -566,7 +573,7 @@ function OutstandingBalancesCard() {
     <Card className="overflow-hidden">
       <CardHeader
         title="Outstanding Balances"
-        subtitle="Patients with unpaid bills — collect or waive"
+        subtitle="Clinic bills & pharmacy credit — collect or waive"
         action={<DateRangeFilter value={range} onChange={setRange} />}
       />
       {q.isLoading ? (
@@ -590,7 +597,11 @@ function OutstandingBalancesCard() {
           onClose={() => setModal(null)}
           onSubmit={async (body) => {
             try {
-              await mut.mutateAsync({ visitId: modal.row.visit_id, body })
+              await mut.mutateAsync({
+                entityId: modal.row.entity_id,
+                source: modal.row.source,
+                body,
+              })
               setModal(null)
             } catch {
               /* toast handled by mutation */
@@ -611,10 +622,16 @@ function OutstandingBody({ data, page, pages, onPage, onAction }) {
     return (
       <EmptyState
         icon="checkCircle"
-        title="All bills settled"
-        description="No outstanding balances — every patient has paid in full."
+        title="All credits settled"
+        description="No outstanding clinic bills or pharmacy credit."
       />
     )
+  }
+
+  const sourceBadge = (source) => {
+    if (source === 'pharmacy')
+      return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
   }
 
   return (
@@ -623,7 +640,7 @@ function OutstandingBody({ data, page, pages, onPage, onAction }) {
         <Icon name="alert" size={14} className="text-amber-500 dark:text-amber-400 shrink-0" />
         <p className="text-[12px] text-amber-800 dark:text-amber-300">
           <span className="font-semibold tabular-nums">{formatMoney(totalOutstanding)}</span> outstanding &middot;{' '}
-          <span className="font-semibold">{count}</span> patient{count === 1 ? '' : 's'}
+          <span className="font-semibold">{count}</span> record{count === 1 ? '' : 's'}
         </p>
       </div>
 
@@ -631,7 +648,7 @@ function OutstandingBody({ data, page, pages, onPage, onAction }) {
         <table className="w-full">
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
-              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400">Patient</th>
+              <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400">Source / Patient</th>
               <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400 hidden md:table-cell">Phone</th>
               <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-widest text-gray-400">Bill</th>
               <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-widest text-gray-400 hidden md:table-cell">Paid</th>
@@ -643,10 +660,18 @@ function OutstandingBody({ data, page, pages, onPage, onAction }) {
             {rows.map((r) => {
               const bal = Number(r.balance ?? 0)
               return (
-                <tr key={r.visit_id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
+                <tr key={`${r.source}-${r.entity_id}`} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                   <td className="px-4 py-3">
+                    <div className="flex items-center gap-2 mb-0.5">
+                      <Badge className={sourceBadge(r.source)}>
+                        {r.source === 'pharmacy' ? 'Pharmacy' : 'Clinic'}
+                      </Badge>
+                    </div>
                     <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{r.patient_name}</p>
-                    <p className="text-[10px] text-gray-400">#{r.patient_id} &middot; Visit #{r.visit_id}</p>
+                    <p className="text-[10px] text-gray-400">
+                      #{r.patient_id}
+                      {r.source === 'clinic' && ` · Visit #${r.entity_id}`}
+                    </p>
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell text-[12px] text-gray-600 dark:text-gray-300">
                     {r.patient_phone || '—'}
@@ -1362,7 +1387,7 @@ function StatTile({ label, value, icon, color = 'blue', sublabel }) {
     amber: { card: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50', val: 'text-amber-700 dark:text-amber-400', ic: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400' },
     red: { card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50', val: 'text-red-700 dark:text-red-400', ic: 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' },
     purple: { card: 'bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-900/50', val: 'text-purple-700 dark:text-purple-400', ic: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400' },
-    slate: { card: 'bg-white border-gray-200 dark:bg-[#1e293b] dark:border-gray-700/60', val: 'text-gray-700 dark:text-gray-300', ic: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
+        slate: { card: 'bg-white border-gray-200 dark:bg-[#1e293b] dark:border-gray-700/60', val: 'text-gray-700 dark:text-gray-300', ic: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
   }
   const c = colors[color] || colors.blue
   return (

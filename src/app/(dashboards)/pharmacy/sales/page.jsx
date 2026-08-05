@@ -1,6 +1,5 @@
 'use client'
 
-
 import { useState, useRef, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -18,8 +17,6 @@ const PRICE_TIERS = [
   { key: 'wholesale', label: 'Wholesale', priceField: 'wholesale_price' },
 ]
 
-// Chip order. Adding a category to the ProductCategory enum and to this map
-// is all the UI needs — the chips themselves are built from the data.
 const CATEGORY_META = {
   medication: {
     label: 'Medications',
@@ -39,6 +36,7 @@ const CATEGORY_META = {
 }
 
 const NEUTRAL_BADGE = 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400'
+const ALLOWED_PAYMENT_METHODS = ['cash', 'mpesa', 'credit']
 
 function categoryLabel(c) { return CATEGORY_META[c]?.label || cap(c) }
 function categoryIcon(c) { return CATEGORY_META[c]?.icon || 'box' }
@@ -62,6 +60,7 @@ function paymentBadgeClass(method) {
   if (method === 'cash') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
   if (method === 'mpesa') return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
   if (method === 'insurance') return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+  if (method === 'credit') return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
   return NEUTRAL_BADGE
 }
 
@@ -69,9 +68,6 @@ function errMsg(err, fallback) {
   return err?.response?.data?.error || err?.data?.error || err?.message || fallback
 }
 
-// Non-medications have no generic name or strength. The old dropdown called
-// `d.generic_name.toLowerCase()` unguarded — one box of gloves in the
-// catalogue and the whole search threw.
 function productSubtitle(p) {
   if (!p) return ''
   if (p.category === 'medication') {
@@ -134,8 +130,6 @@ export default function OTCSalesTab() {
       setShowNewSale(false)
       setReceiptSale(res.sale)
     } catch (err) {
-      // A 409 carries the exact shortfall — say which item and by how much,
-      // not "Could not complete sale".
       const shortfalls = err?.response?.data?.shortfalls || err?.data?.shortfalls
       if (Array.isArray(shortfalls) && shortfalls.length) {
         toast.error(
@@ -151,7 +145,6 @@ export default function OTCSalesTab() {
 
   return (
     <div className="space-y-4">
-      {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon="dollarSign" color="green" label="Today's Revenue"
           value={formatMoney(stats.today_revenue)} sublabel="counter sales today" />
@@ -163,7 +156,6 @@ export default function OTCSalesTab() {
           value={stats.total_sales} sublabel="transactions" />
       </div>
 
-      {/* Action bar */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Recent Sales</h3>
@@ -179,7 +171,6 @@ export default function OTCSalesTab() {
         </button>
       </div>
 
-      {/* Sales list */}
       {!sales.length ? (
         <EmptyState
           icon="receipt"
@@ -284,8 +275,12 @@ function SaleCard({ sale, onPrint }) {
 // ─── New sale modal ───────────────────────────────────────────────────────────
 
 function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
+  // ── ALL HOOKS AT THE TOP ─────────────────────────────────────────
   const [customerName, setCustomerName] = useState('Walk-in Customer')
-  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [customerPhone, setCustomerPhone] = useState('')
+  const [customerSearchQuery, setCustomerSearchQuery] = useState('')
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
+  const [selectedCustomer, setSelectedCustomer] = useState(null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -295,27 +290,48 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const [quantity, setQuantity] = useState(1)
   const [cart, setCart] = useState([])
 
-  // The whole catalogue — the counter sells every category.
+  const [discountAmount, setDiscountAmount] = useState(0)
+  const [discountReason, setDiscountReason] = useState('')
+
+  const [paymentLines, setPaymentLines] = useState([
+    { uid: 1, method: 'cash', amount: '', reference: '' },
+  ])
+  const [nextUid, setNextUid] = useState(2)
+
+  const searchRef = useRef(null)
+  const customerSearchRef = useRef(null)
+
   const productsQuery = useQuery({
     queryKey: ['pharmacy', 'products', 'all'],
     queryFn: () => api.get('/api/pharmacy/products'),
     staleTime: 30000,
   })
 
-  const products = productsQuery.data?.items || []
-  const searchRef = useRef(null)
+  const customersQuery = useQuery({
+    queryKey: ['pharmacy', 'customers', customerSearchQuery],
+    queryFn: () => api.get('/api/pharmacy/customers', { params: { q: customerSearchQuery } }),
+    enabled: customerSearchQuery.trim().length > 1 && showCustomerDropdown,
+    staleTime: 30000,
+  })
 
+  // ── EFFECTS ──────────────────────────────────────────────────────
   useEffect(() => {
     function onMouseDown(e) {
       if (searchRef.current && !searchRef.current.contains(e.target)) {
         setShowDropdown(false)
+      }
+      if (customerSearchRef.current && !customerSearchRef.current.contains(e.target)) {
+        setShowCustomerDropdown(false)
       }
     }
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
 
-  // Only show chips for categories actually stocked.
+  // ── DERIVED STATE ────────────────────────────────────────────────
+  const products = productsQuery.data?.items || []
+  const customers = customersQuery.data?.customers || []
+
   const categoriesPresent = useMemo(
     () => [...new Set(products.map((p) => p.category))]
       .sort((a, b) => Object.keys(CATEGORY_META).indexOf(a) - Object.keys(CATEGORY_META).indexOf(b)),
@@ -328,7 +344,6 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       .filter((p) => categoryFilter === 'all' || p.category === categoryFilter)
       .filter((p) => {
         if (!q) return true
-        // Every one of these is optional on a non-medication. Guard them all.
         return (
           (p.name || '').toLowerCase().includes(q) ||
           (p.generic_name || '').toLowerCase().includes(q) ||
@@ -345,12 +360,42 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       : 0
 
   const lineSubtotal = (selectedPrice || 0) * (quantity || 0)
-  const cartTotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
 
-  // Quantity already in the cart for this product, so a second line for the
-  // same item cannot quietly exceed the shelf.
+  const cartSubtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
+  const disc = Math.max(0, parseInt(discountAmount) || 0)
+  const cartTotal = Math.max(0, cartSubtotal - disc)
+
+  const totalPaid = paymentLines.reduce((s, p) => s + (parseInt(p.amount) || 0), 0)
+  const remaining = cartTotal - totalPaid
+  const hasCredit = paymentLines.some((p) => p.method === 'credit')
+  const isBalanced = remaining === 0
+  const hasEmptyMethod = paymentLines.some((p) => !p.method)
+
+  const usedMethods = useMemo(
+    () => new Set(paymentLines.map((p) => p.method).filter(Boolean)),
+    [paymentLines]
+  )
+
+  const availableMethods = ALLOWED_PAYMENT_METHODS.filter((m) => !usedMethods.has(m))
+
   const inCartFor = (productId) =>
     cart.filter((c) => c.product_id === productId).reduce((s, c) => s + c.quantity, 0)
+
+  // ── HANDLERS ─────────────────────────────────────────────────────
+  function selectCustomer(customer) {
+    setCustomerName(customer.name)
+    setCustomerPhone(customer.phone || '')
+    setSelectedCustomer(customer)
+    setShowCustomerDropdown(false)
+    setCustomerSearchQuery('')
+  }
+
+  function clearCustomer() {
+    setSelectedCustomer(null)
+    setCustomerName('Walk-in Customer')
+    setCustomerPhone('')
+    setCustomerSearchQuery('')
+  }
 
   function selectProduct(product) {
     setSelectedProduct(product)
@@ -401,15 +446,55 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     setCart((prev) => prev.filter((_, i) => i !== index))
   }
 
+  function addPaymentLine() {
+    if (availableMethods.length === 0) {
+      toast.error('All payment methods are already added')
+      return
+    }
+    setPaymentLines((prev) => [
+      ...prev,
+      { uid: nextUid, method: availableMethods[0], amount: '', reference: '' },
+    ])
+    setNextUid((n) => n + 1)
+  }
+
+  function removePaymentLine(uid) {
+    setPaymentLines((prev) => prev.filter((p) => p.uid !== uid))
+  }
+
+  function updatePaymentLine(uid, updates) {
+    setPaymentLines((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...updates } : p)))
+  }
+
   function handleSubmit(e) {
     e.preventDefault()
     if (!cart.length) {
       toast.error('Add at least one item to the sale')
       return
     }
+    if (disc > 0 && !discountReason.trim()) {
+      toast.error('A reason is required for every discount')
+      return
+    }
+    if (remaining !== 0) {
+      toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
+      return
+    }
+    if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
+      toast.error('Credit sales require a customer name and phone')
+      return
+    }
+
     onComplete({
-      customer_name: customerName.trim() || 'Walk-in Customer',
-      payment_method: paymentMethod,
+      customer_name: customerName.trim(),
+      customer_phone: hasCredit ? customerPhone.trim() : undefined,
+      discount_amount: disc,
+      discount_reason: disc > 0 ? discountReason.trim() : undefined,
+      payments: paymentLines.map((p) => ({
+        method: p.method,
+        amount: parseInt(p.amount) || 0,
+        reference: p.reference,
+      })),
       items: cart.map((i) => ({
         product_id: i.product_id,
         name: i.name,
@@ -420,6 +505,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     })
   }
 
+  // ── RENDER ───────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="absolute inset-0 bg-black/50" />
@@ -450,51 +536,96 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto">
-          {/* Customer + payment */}
-          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                Customer Name
-              </label>
+          {/* ── Customer search ──────────────────────────────────────────── */}
+          <div className="px-5 py-3 border-b border-gray-200 dark:border-gray-700/60">
+            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+              Customer
+            </label>
+            <div ref={customerSearchRef} className="relative space-y-2">
+              <div className="relative">
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => {
+                    setCustomerName(e.target.value)
+                    setCustomerSearchQuery(e.target.value)
+                    setShowCustomerDropdown(true)
+                    if (selectedCustomer) setSelectedCustomer(null)
+                  }}
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  placeholder="Walk-in Customer"
+                  className="w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+                />
+                {selectedCustomer && (
+                  <button
+                    type="button"
+                    onClick={clearCustomer}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                  >
+                    <Icon name="x" size={14} />
+                  </button>
+                )}
+              </div>
+
+              {showCustomerDropdown && customerSearchQuery.trim().length > 1 && (
+                <div className="absolute z-30 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl max-h-60 overflow-y-auto">
+                  {customersQuery.isLoading && (
+                    <div className="px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
+                      Searching customers…
+                    </div>
+                  )}
+                  {customersQuery.error && (
+                    <div className="px-3 py-3 text-center">
+                      <p className="text-[12px] text-red-600 dark:text-red-400 mb-2">
+                        Could not load customers
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => customersQuery.refetch()}
+                        className="px-3 py-1 rounded-lg text-[11px] font-medium bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100"
+                      >
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                  {!customersQuery.isLoading && !customersQuery.error && customers.length === 0 && (
+                    <div className="px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
+                      No customers found. Type to create a new one.
+                    </div>
+                  )}
+                  {!customersQuery.isLoading && !customersQuery.error && customers.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => selectCustomer(c)}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center justify-between gap-2 border-b border-gray-100 dark:border-gray-700/40 last:border-b-0"
+                    >
+                      <div>
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{c.name}</p>
+                        {c.phone && <p className="text-[11px] text-gray-500 dark:text-gray-400">{c.phone}</p>}
+                      </div>
+                      <span className="text-[11px] text-gray-400">Select</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <input
                 type="text"
-                value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
-                placeholder="Walk-in Customer"
+                value={customerPhone}
+                onChange={(e) => setCustomerPhone(e.target.value)}
+                placeholder="Phone number (required for credit)"
                 className="w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
               />
             </div>
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                Payment Method
-              </label>
-              <div className="grid grid-cols-4 gap-1.5">
-                {PAYMENT_METHODS.map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setPaymentMethod(m)}
-                    className={[
-                      'px-2 py-2 rounded-lg text-[11px] font-semibold capitalize transition-colors',
-                      paymentMethod === m
-                        ? 'bg-[#1a6cbf] text-white'
-                        : 'bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400',
-                    ].join(' ')}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </div>
           </div>
 
-          {/* Product search */}
+          {/* ── Product search + add to cart ─────────────────────────────── */}
           <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
               Add Item
             </p>
 
-            {/* Category chips */}
             {categoriesPresent.length > 1 && (
               <div className="flex items-center gap-1.5 flex-wrap mb-2">
                 {['all', ...categoriesPresent].map((c) => {
@@ -539,7 +670,22 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
               />
 
-              {showDropdown && filteredProducts.length > 0 && (
+              {showDropdown && productsQuery.isError && (
+                <div className="absolute z-20 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-red-200 dark:border-red-900/60 shadow-xl px-3 py-3 text-center">
+                  <p className="text-[12px] text-red-600 dark:text-red-400 mb-2">
+                    {errMsg(productsQuery.error, 'Could not load products')}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => productsQuery.refetch()}
+                    className="px-3 py-1 rounded-lg text-[11px] font-medium bg-red-50 dark:bg-red-900/30 text-red-600 dark:text-red-400 hover:bg-red-100"
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+
+              {showDropdown && !productsQuery.isError && filteredProducts.length > 0 && (
                 <div className="absolute z-20 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl max-h-60 overflow-y-auto">
                   {filteredProducts.map((product) => {
                     const remaining = product.current_stock - inCartFor(product.id)
@@ -589,14 +735,13 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 </div>
               )}
 
-              {showDropdown && !filteredProducts.length && (
+              {showDropdown && !productsQuery.isError && !filteredProducts.length && (
                 <div className="absolute z-20 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
                   {productsQuery.isLoading ? 'Loading items…' : 'No matching items'}
                 </div>
               )}
             </div>
 
-            {/* Selected item — tier picker + qty */}
             {selectedProduct && (
               <div className="mt-3 rounded-lg border border-blue-200 dark:border-blue-900/60 bg-blue-50/40 dark:bg-blue-950/20 p-3">
                 <div className="flex items-start justify-between gap-2 flex-wrap">
@@ -627,51 +772,25 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                     type="button"
                     onClick={clearSelection}
                     className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                    aria-label="Clear selection"
                   >
                     <Icon name="x" size={14} />
                   </button>
                 </div>
 
-                {/* Price tiers */}
                 <div className="mt-3">
                   <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1.5">
-                    Select Price Tier
+                    Price
                   </p>
-                  <div className="grid grid-cols-3 gap-2">
-                    {PRICE_TIERS.map((tier) => {
-                      const price = selectedProduct[tier.priceField] || 0
-                      const active = selectedTier === tier.key
-                      const unset = price <= 0
-                      return (
-                        <button
-                          key={tier.key}
-                          type="button"
-                          onClick={() => setSelectedTier(tier.key)}
-                          disabled={unset && tier.key !== 'normal'}
-                          title={unset && tier.key !== 'normal' ? 'No price set for this tier' : undefined}
-                          className={[
-                            'px-2 py-2 rounded-lg text-[11px] font-semibold transition-colors border text-center disabled:opacity-40 disabled:cursor-not-allowed',
-                            active
-                              ? tier.key === 'normal'
-                                ? 'bg-blue-600 text-white border-blue-600'
-                                : tier.key === 'promotional'
-                                  ? 'bg-purple-600 text-white border-purple-600'
-                                  : 'bg-cyan-600 text-white border-cyan-600'
-                              : 'bg-white dark:bg-[#1e293b] text-gray-700 dark:text-gray-300 border-gray-200 dark:border-gray-700/60 hover:border-blue-300 dark:hover:border-blue-800',
-                          ].join(' ')}
-                        >
-                          <span className="block">{tier.label}</span>
-                          <span className="block text-[10px] opacity-90 tabular-nums mt-0.5">
-                            {unset ? 'not set' : formatMoney(price)}
-                          </span>
-                        </button>
-                      )
-                    })}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="px-3 py-2 rounded-lg text-[12px] font-semibold bg-blue-600 text-white border border-blue-600">
+                      Normal — {formatMoney(selectedProduct.normal_price)}
+                    </div>
+                    <span className="text-[11px] text-gray-400">
+                      Promo & wholesale tiers disabled
+                    </span>
                   </div>
                 </div>
 
-                {/* Quantity + subtotal + add */}
                 <div className="mt-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
                   <div className="sm:col-span-3">
                     <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
@@ -709,8 +828,8 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
             )}
           </div>
 
-          {/* Cart */}
-          <div className="px-5 py-4">
+          {/* ── Cart ─────────────────────────────────────────────────────── */}
+          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60">
             <div className="flex items-center justify-between mb-2">
               <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">
                 Cart ({cart.length})
@@ -761,7 +880,6 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                       type="button"
                       onClick={() => removeCartItem(i)}
                       className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
-                      aria-label="Remove from cart"
                     >
                       <Icon name="trash" size={14} />
                     </button>
@@ -770,20 +888,162 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               </div>
             )}
 
-            <div className="mt-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-widest text-[#1a6cbf] dark:text-blue-400">
-                Total ({cart.length} line{cart.length !== 1 ? 's' : ''})
-              </span>
-              <span className="text-lg font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">
-                {formatMoney(cartTotal)}
-              </span>
+            {/* Discount */}
+            {cart.length > 0 && (
+              <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
+                    Discount Amount
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={cartSubtotal}
+                    value={discountAmount}
+                    onChange={(e) => setDiscountAmount(Math.max(0, Math.min(cartSubtotal, Number(e.target.value) || 0)))}
+                    placeholder="0"
+                    className="w-full h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1">
+                    Reason {disc > 0 && <span className="text-red-500">*</span>}
+                  </label>
+                  <input
+                    type="text"
+                    value={discountReason}
+                    onChange={(e) => setDiscountReason(e.target.value)}
+                    placeholder="e.g. staff discount"
+                    className="w-full h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div className="mt-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 space-y-1">
+              {disc > 0 && (
+                <div className="flex items-center justify-between text-[11px] text-gray-600 dark:text-gray-400">
+                  <span>Subtotal</span>
+                  <span className="tabular-nums">{formatMoney(cartSubtotal)}</span>
+                </div>
+              )}
+              {disc > 0 && (
+                <div className="flex items-center justify-between text-[11px] text-red-600 dark:text-red-400">
+                  <span>Discount</span>
+                  <span className="tabular-nums">-{formatMoney(disc)}</span>
+                </div>
+              )}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-[#1a6cbf] dark:text-blue-400">
+                  Total ({cart.length} line{cart.length !== 1 ? 's' : ''})
+                </span>
+                <span className="text-lg font-bold text-[#1a6cbf] dark:text-blue-400 tabular-nums">
+                  {formatMoney(cartTotal)}
+                </span>
+              </div>
             </div>
             <p className="text-[10px] text-gray-400 mt-1.5">
               Final prices and tax are confirmed by the server when the sale is recorded.
             </p>
           </div>
 
-          {/* Footer */}
+          {/* ── Payments ─────────────────────────────────────────────────── */}
+          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 space-y-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                  Payments
+                </label>
+                <span
+                  className={[
+                    'text-[11px] font-medium tabular-nums',
+                    isBalanced
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-amber-600 dark:text-amber-400',
+                  ].join(' ')}
+                >
+                  {isBalanced ? 'Fully paid' : `Remaining: ${formatMoney(remaining)}`}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {paymentLines.map((line) => (
+                  <div key={line.uid} className="flex items-center gap-2">
+                    <select
+                      value={line.method}
+                      onChange={(e) => updatePaymentLine(line.uid, { method: e.target.value })}
+                      className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                    >
+                      <option value="" disabled>Select method</option>
+                      {ALLOWED_PAYMENT_METHODS
+                        .filter((m) => m === line.method || !usedMethods.has(m))
+                        .map((m) => (
+                          <option key={m} value={m}>{cap(m)}</option>
+                        ))}
+                    </select>
+
+                    <input
+                      type="number"
+                      min={0}
+                      value={line.amount}
+                      onChange={(e) => updatePaymentLine(line.uid, { amount: e.target.value })}
+                      placeholder="Amount"
+                      className="flex-1 h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                    />
+
+                    {line.method === 'mpesa' && (
+                      <input
+                        type="text"
+                        value={line.reference}
+                        onChange={(e) => updatePaymentLine(line.uid, { reference: e.target.value })}
+                        placeholder="Ref"
+                        className="w-24 h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                      />
+                    )}
+
+                    {paymentLines.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removePaymentLine(line.uid)}
+                        className="w-8 h-9 flex items-center justify-center rounded-lg text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/30 dark:hover:text-red-400"
+                      >
+                        <Icon name="x" size={14} />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => addPaymentLine()}
+                disabled={availableMethods.length === 0}
+                className="mt-2 px-3 py-1.5 rounded-lg text-[11px] font-medium bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Icon name="plus" size={12} /> Add Payment
+              </button>
+            </div>
+
+            {hasCredit && (
+              <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30">
+                <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 mb-2">
+                  Credit Sale — Customer Details Required
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    value={customerPhone}
+                    onChange={(e) => setCustomerPhone(e.target.value)}
+                    placeholder="Phone number"
+                    required
+                    className="h-9 px-3 text-[13px] rounded-lg border border-amber-200 dark:border-amber-900/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Footer ─────────────────────────────────────────────────── */}
           <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700/60 flex items-center justify-end gap-2 bg-gray-50/50 dark:bg-[#1e293b]/50">
             <button
               type="button"
@@ -794,7 +1054,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
             </button>
             <button
               type="submit"
-              disabled={loading || !cart.length}
+              disabled={loading || !cart.length || !isBalanced || hasEmptyMethod}
               className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading
@@ -814,10 +1074,9 @@ function ReceiptModal({ sale, soldBy, onClose }) {
   const items = sale.items || []
   const total = sale.total ?? items.reduce((s, i) => s + i.unit_price * i.quantity, 0)
   const taxTotal = sale.tax_total ?? items.reduce((s, i) => s + (i.tax_amount || 0), 0)
+  const subtotal = sale.subtotal ?? items.reduce((s, i) => s + i.unit_price * i.quantity, 0)
+  const discount = sale.discount_amount || 0
 
-  // The clinic's name, address, phone and email were hardcoded here while
-  // ClinicSettings already stored all four. Falls back to a placeholder only
-  // if the settings row has not been filled in.
   const profileQuery = useQuery({
     queryKey: ['pharmacy', 'clinic-profile'],
     queryFn: () => api.get('/api/admin/settings'),
@@ -850,7 +1109,6 @@ function ReceiptModal({ sale, soldBy, onClose }) {
         onClick={(e) => e.stopPropagation()}
       >
         <div className="p-6 print-area">
-          {/* Clinic header — from settings */}
           <div className="text-center border-b border-dashed border-gray-300 pb-3 mb-3">
             <h2 className="text-[15px] font-bold tracking-tight">{clinic.name || 'Clinic'}</h2>
             {clinic.tagline && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.tagline}</p>}
@@ -886,41 +1144,43 @@ function ReceiptModal({ sale, soldBy, onClose }) {
           </div>
 
           {/* Items */}
-          <div className="border-t border-dashed border-gray-300 pt-2">
-            <div className="grid grid-cols-12 text-[10px] font-semibold uppercase tracking-widest text-gray-500 pb-1.5 border-b border-gray-200">
-              <span className="col-span-6">Item</span>
-              <span className="col-span-2 text-right">Qty</span>
-              <span className="col-span-2 text-right">Price</span>
-              <span className="col-span-2 text-right">Total</span>
-            </div>
-            {items.map((item, i) => (
-              <div key={i} className="grid grid-cols-12 py-1.5 border-b border-gray-100 text-[11px] text-black">
-                <div className="col-span-6">
-                  <p className="font-medium leading-tight">{item.name}</p>
-                  <p className="text-[9px] text-gray-500 uppercase tracking-wider mt-0.5">
-                    {tierLabel(item.price_tier)} tier
-                  </p>
+          <div className="border-t border-dashed border-gray-300 pt-3 mb-3">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
+              Items
+            </p>
+            <div className="space-y-1.5">
+              {items.map((item, i) => (
+                <div key={i} className="flex justify-between text-[11px]">
+                  <span className="flex-1 pr-2">
+                    {item.name} × {item.quantity}
+                  </span>
+                  <span className="tabular-nums font-medium">
+                    {formatMoney(item.unit_price * item.quantity)}
+                  </span>
                 </div>
-                <span className="col-span-2 text-right tabular-nums self-center">{item.quantity}</span>
-                <span className="col-span-2 text-right tabular-nums self-center">
-                  {formatMoney(item.unit_price)}
-                </span>
-                <span className="col-span-2 text-right tabular-nums font-medium self-center">
-                  {formatMoney(item.unit_price * item.quantity)}
-                </span>
-              </div>
-            ))}
+              ))}
+            </div>
           </div>
 
-          {/* Total */}
-          <div className="mt-3 pt-2 border-t-2 border-black">
+          {/* Totals */}
+          <div className="border-t-2 border-black pt-3 space-y-1">
+            <div className="flex justify-between text-[11px] text-gray-600">
+              <span>Subtotal</span>
+              <span className="tabular-nums">{formatMoney(subtotal)}</span>
+            </div>
+            {discount > 0 && (
+              <div className="flex justify-between text-[11px] text-red-600">
+                <span>Discount</span>
+                <span className="tabular-nums">-{formatMoney(discount)}</span>
+              </div>
+            )}
             {taxTotal > 0 && (
-              <div className="flex justify-between items-center text-[11px] text-gray-600 mb-1">
-                <span>Of which tax</span>
+              <div className="flex justify-between text-[11px] text-gray-600">
+                <span>Tax</span>
                 <span className="tabular-nums">{formatMoney(taxTotal)}</span>
               </div>
             )}
-            <div className="flex justify-between items-center">
+            <div className="flex justify-between items-center pt-1 border-t border-gray-300">
               <span className="text-[12px] font-bold uppercase tracking-widest">Total</span>
               <span className="text-[16px] font-bold tabular-nums">{formatMoney(total)}</span>
             </div>

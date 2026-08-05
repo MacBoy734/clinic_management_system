@@ -303,9 +303,6 @@ function RxBlock({ prescriptions }) {
                       item.status === 'declined' ? 'bg-red-50     dark:bg-red-900/20     text-red-700     dark:text-red-400     border-red-100     dark:border-red-800/40' :
                         'bg-amber-50   dark:bg-amber-900/20   text-amber-700   dark:text-amber-400   border-amber-100   dark:border-amber-800/40'
                   }>{cap(item.status)}</Badge>
-                  <span className="text-[11px] font-mono text-gray-500 dark:text-gray-400">
-                    KES {fmt(item.unit_cost * item.quantity)}
-                  </span>
                 </div>
               </div>
             ))}

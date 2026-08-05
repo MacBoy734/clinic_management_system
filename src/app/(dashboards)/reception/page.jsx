@@ -42,6 +42,11 @@ function LabTestPicker({ selectedTests, onToggle }) {
     staleTime: 5 * 60 * 1000, // catalog rarely changes within a shift
   })
 
+  const waiveMutation = useMutation({
+    mutationFn: ({ visitId, reason }) => api.patch(`/api/reception/visits/${visitId}/waive-stage1`, { reason }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reception'] }),
+  })
+
   const allTests = data?.tests || []
   const categories = ['all', ...new Set(allTests.map((t) => t.category).filter(Boolean))]
 
@@ -240,8 +245,8 @@ function RegisterModal({ onClose }) {
               {VISIT_TYPE_OPTIONS.map((vt) => (
                 <button key={vt.key} type="button" onClick={() => setVisitType(vt.key)}
                   className={`flex items-start gap-3 px-4 py-3 rounded-xl border-2 text-left transition-all ${visitType === vt.key
-                      ? 'border-[#1a6cbf] bg-blue-50 dark:bg-blue-900/20'
-                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-[#1e293b]'
+                    ? 'border-[#1a6cbf] bg-blue-50 dark:bg-blue-900/20'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 bg-white dark:bg-[#1e293b]'
                     }`}>
                   <span className="text-xl shrink-0 mt-0.5">{vt.icon}</span>
                   <div>
@@ -461,7 +466,7 @@ export default function QueueTab() {
                       )}
                     </div>
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 truncate">
-                      {v.doctor && <span>· {v.doctor.username}</span>}
+                      {v.doctor && <span>· {v.doctor}</span>}
                       {v.referred_by && <span className="ml-2">· referred by {v.referred_by}</span>}
                     </p>
                   </div>
@@ -513,6 +518,15 @@ export default function QueueTab() {
           loading={payMutation.isPending}
           onClose={() => setPaying(null)}
           onConfirm={handlePay}
+          onWaive={async ({ reason }) => {
+            try {
+              await waiveMutation.mutateAsync({ visitId: paying.id, reason })
+              toast.success(`Consultation fee waived — ${paying.patient?.name} forwarded to doctor`)
+              setPaying(null)
+            } catch (err) {
+              toast.error(err?.response?.data?.error || err?.message || 'Could not waive fee')
+            }
+          }}
         />
       )}
 

@@ -23,7 +23,9 @@ export function ReceiptModal({ bill, onClose }) {
 
   const handlePrint = () => {
     setPrinting(true)
-    setTimeout(() => { window.print(); setPrinting(false) }, 100)
+    const done = () => setPrinting(false)
+    window.addEventListener('afterprint', done, { once: true })
+    setTimeout(() => window.print(), 50)
   }
 
   const total = bill.total_amount || 0
@@ -31,7 +33,9 @@ export function ReceiptModal({ bill, onClose }) {
   const payable = Math.max(0, total - discount)
   const paid = bill.paid_amount || 0
   const balance = Math.max(0, payable - paid)
-  const isPaid = paid >= payable && payable >= 0 && total > 0
+
+  const isPaid = paid >= payable && payable >= 0
+
   const payments = bill.payments || []
   const items = bill.items || []
   const receiptDate = new Date()
@@ -108,12 +112,26 @@ export function ReceiptModal({ bill, onClose }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {items.map((item, i) => (
-                      <tr key={i} className="border-b border-gray-100">
-                        <td className="py-1.5 pr-3 text-gray-800">{item.name}</td>
-                        <td className="py-1.5 pl-3 text-gray-800 text-right tabular-nums">{formatMoney(item.amount)}</td>
-                      </tr>
-                    ))}
+                    {items.map((item, i) => {
+                      const waived = item.status === 'waived'
+                      return (
+                        <tr key={i} className="border-b border-gray-100">
+                          <td className="py-1.5 pr-3 text-gray-800">
+                            {item.name}
+                            {waived && (
+                              <span className="ml-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">(Waived)</span>
+                            )}
+                          </td>
+                          <td className="py-1.5 pl-3 text-right tabular-nums">
+                            {waived ? (
+                              <span className="text-amber-600 dark:text-amber-500 font-medium text-[11px]">Waived</span>
+                            ) : (
+                              <span className="text-gray-800">{formatMoney(item.amount || 0)}</span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })}
                     <tr className="border-t-2 border-gray-400">
                       <td className="py-2 pr-3 font-bold text-gray-900 uppercase tracking-wider text-[11px]">Total Bill</td>
                       <td className="py-2 pl-3 font-bold text-gray-900 text-right tabular-nums text-[14px]">{formatMoney(total)}</td>

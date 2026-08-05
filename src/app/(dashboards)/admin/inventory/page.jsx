@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import {
@@ -13,15 +13,17 @@ import {
 
 const SUB_TABS = [
   { key: 'lab', label: 'Lab Stock', icon: 'flask' },
-  { key: 'drug', label: 'Pharmacy Stock', icon: 'pillBottle' },
+  { key: 'product', label: 'Product Stock', icon: 'box' },
   { key: 'restocks', label: 'Restock Verification', icon: 'checkCircle' },
 ]
 
 const CATEGORY_BADGES = {
+  medication: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+  consumable: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
+  general: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   consultation: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   procedure: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
   lab: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
-  medication: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
   family_planning: 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-400',
   antibiotic: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
   analgesic: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -32,7 +34,6 @@ const CATEGORY_BADGES = {
   vitamin: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   supplement: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   thyroid: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400',
-  general: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   hematology: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   chemistry: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400',
   urinalysis: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
@@ -41,12 +42,21 @@ const CATEGORY_BADGES = {
   other: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
 }
 
-// Free-text category option lists (no DB enum on stock categories)
-const DRUG_CATEGORIES = ['antibiotic', 'analgesic', 'antihypertensive', 'antidiabetic', 'antacid', 'antihistamine', 'supplement', 'family_planning', 'thyroid', 'general']
-const DRUG_FORMS = ['tablet', 'capsule', 'injection', 'syrup', 'cream', 'drops']
+const PRODUCT_CATEGORIES = [
+  { key: 'all', label: 'All Categories' },
+  { key: 'medication', label: 'Medication' },
+  { key: 'consumable', label: 'Consumable' },
+  { key: 'general', label: 'General' },
+]
+
+const EXPIRY_FILTERS = [
+  { key: 'all', label: 'All Expiry' },
+  { key: '1month', label: '< 1 Month' },
+  { key: '3months', label: '< 3 Months' },
+]
+
+const MEDICATION_FORMS = ['tablet', 'capsule', 'injection', 'syrup', 'cream', 'drops']
 const LAB_CATEGORIES = ['supplies', 'hematology', 'chemistry', 'urinalysis', 'microbiology']
-
-
 
 function daysUntil(dateStr) {
   if (!dateStr) return null
@@ -72,12 +82,18 @@ function expiryBadge(dateStr) {
   return { label: `${d}d left`, cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400' }
 }
 
+function getNearestBatch(item) {
+  if (!item.batches?.length) return null
+  const active = item.batches.filter((b) => !b.is_exhausted && b.expiry_date)
+  if (!active.length) return null
+  return active.sort((a, b) => new Date(a.expiry_date) - new Date(b.expiry_date))[0]
+}
+
 export default function InventoryTab() {
   const [sub, setSub] = useState('lab')
 
   return (
     <div className="space-y-4">
-      {/* Secondary pill nav */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
         {SUB_TABS.map((t) => (
           <button
@@ -96,7 +112,7 @@ export default function InventoryTab() {
       </div>
 
       {sub === 'lab' && <LabStockSubTab />}
-      {sub === 'drug' && <DrugStockSubTab />}
+      {sub === 'product' && <ProductStockSubTab />}
       {sub === 'restocks' && <RestockVerificationSubTab />}
     </div>
   )
@@ -170,7 +186,6 @@ function StatTile({ label, value, icon, color = 'blue', sublabel }) {
   )
 }
 
-// Stock level visual bar — 0-100% width based on qty vs 2× reorder level
 function StockBar({ item }) {
   const stock = Number(item.current_stock) || 0
   const reorder = Number(item.reorder_level) || 0
@@ -228,7 +243,6 @@ function RowAction({ icon, label, onClick, color = 'gray', disabled }) {
   )
 }
 
-// Reusable category/form <option> renderers
 const optionsFrom = (arr) =>
   arr.map((v) => <option key={v} value={v}>{cap(v)}</option>)
 
@@ -246,13 +260,11 @@ function LabStockSubTab() {
   })
 
   const restockMut = useMutation({
-    // ADD via adjustment — NOT an absolute set
     mutationFn: ({ id, quantity }) => api.patch(`/api/admin/lab-stock/${id}/quantity`, { adjustment: quantity }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] }),
   })
 
   const editMut = useMutation({
-    // PUT preserves current_stock (endpoint only touches supplied metadata fields)
     mutationFn: ({ id, ...body }) => api.put(`/api/admin/lab-stock/${id}`, body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'lab-stock'] }),
   })
@@ -276,7 +288,6 @@ function LabStockSubTab() {
     return <ErrorState message={q.error?.message || 'Could not load lab stock'} onRetry={q.refetch} />
   }
 
-  // Endpoint returns { stock }
   const items = Array.isArray(q.data?.stock) ? q.data.stock : []
   const lowStock = items.filter((i) => (Number(i.current_stock) || 0) > 0 && (Number(i.current_stock) || 0) <= (Number(i.reorder_level) || 0))
   const outOfStock = items.filter((i) => (Number(i.current_stock) || 0) === 0)
@@ -407,9 +418,7 @@ function LabStockSubTab() {
                 current_stock: Number(body.quantity),
                 reorder_level: Number(body.reorder_level) || 0,
                 unit: body.unit,
-                unit_cost: Number(body.unit_cost) || 0,
                 supplier: body.supplier || null,
-                batch_number: body.batch_number || null,
                 expiry_date: body.expiry_date || null,
               })
               toast.success(`${body.name} added to lab inventory`)
@@ -423,22 +432,53 @@ function LabStockSubTab() {
   )
 }
 
-// ─── Sub-tab 2: Drug Stock ───────────────────────────────────────
-function DrugStockSubTab() {
+// ─── Sub-tab 2: Product Stock ────────────────────────────────────
+function ProductStockSubTab() {
   const queryClient = useQueryClient()
   const [restockItem, setRestockItem] = useState(null)
   const [editItem, setEditItem] = useState(null)
   const [search, setSearch] = useState('')
-  const [showAddDrug, setShowAddDrug] = useState(false)
+  const [showAdd, setShowAdd] = useState(false)
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [expiryFilter, setExpiryFilter] = useState('all')
 
-  const q = useQuery({
-    queryKey: ['admin', 'drug-stock'],
-    queryFn: () => api.get('/api/admin/drug-stock'),
-    staleTime: 30000,
-  })
+  const {
+  data,
+  fetchNextPage,
+  hasNextPage,
+  isFetchingNextPage,
+  isLoading,
+  isError,
+  error,
+  refetch,
+} = useInfiniteQuery({
+  queryKey: ['admin', 'drug-stock', search.trim(), categoryFilter, expiryFilter],
+  queryFn: async ({ pageParam = 1 }) => {
+    // Build query string manually — works with ANY api.get() wrapper
+    const query = new URLSearchParams()
+    const s = search.trim()
+    if (s) query.set('search', s)
+    if (categoryFilter !== 'all') query.set('category', categoryFilter)
+    if (expiryFilter !== 'all') query.set('expiry_filter', expiryFilter)
+    query.set('page', String(pageParam))
+    query.set('limit', '20')
+
+    const qs = query.toString()
+    const url = `/api/admin/drug-stock${qs ? '?' + qs : ''}`
+
+    const data = await api.get(url)
+    return data
+  },
+  getNextPageParam: (lastPage) => lastPage?.nextPage,
+  staleTime: 30000,
+})
+
+  const items = data?.pages.flatMap((p) => p.items) || []
+  const totalItems = data?.pages[0]?.total || 0
 
   const restockMut = useMutation({
-    mutationFn: ({ id, quantity }) => api.patch(`/api/admin/drug-stock/${id}/quantity`, { adjustment: quantity }),
+    mutationFn: ({ id, quantity, expiry_date }) =>
+      api.put(`/api/admin/drug-stock/${id}/quantity`, { adjustment: quantity, expiry_date }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] }),
   })
 
@@ -452,7 +492,7 @@ function DrugStockSubTab() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] }),
   })
 
-  if (q.isLoading) {
+  if (isLoading) {
     return (
       <div className="space-y-4">
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -462,95 +502,153 @@ function DrugStockSubTab() {
       </div>
     )
   }
-  if (q.isError) {
-    return <ErrorState message={q.error?.message || 'Could not load pharmacy stock'} onRetry={q.refetch} />
+  if (isError) {
+    return <ErrorState message={error?.message || 'Could not load product stock'} onRetry={refetch} />
   }
 
-  const items = Array.isArray(q.data?.items) ? q.data.items : []
   const lowStock = items.filter((i) => (Number(i.current_stock) || 0) > 0 && (Number(i.current_stock) || 0) <= (Number(i.reorder_level) || 0))
   const outOfStock = items.filter((i) => (Number(i.current_stock) || 0) === 0)
-  // Inventory value at cost
-  const totalValue = items.reduce((s, i) => s + (Number(i.current_stock) || 0) * (Number(i.unit_cost) || 0), 0)
-
-  const sq = search.trim().toLowerCase()
-  const filtered = items.filter((i) => {
-    if (!sq) return true
-    return (i.name || '').toLowerCase().includes(sq) || (i.generic_name || '').toLowerCase().includes(sq)
+  const totalValue = items.reduce((s, i) => s + (Number(i.current_stock) || 0) * (Number(i.normal_price) || 0), 0)
+  const expiringSoon = items.filter((i) => {
+    const b = getNearestBatch(i)
+    if (!b?.expiry_date) return false
+    const d = daysUntil(b.expiry_date)
+    return d !== null && d >= 0 && d <= 90
   })
 
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Total Drugs" value={items.length} icon="pillBottle" color="blue" sublabel="SKUs" />
+        <StatTile label="Total Items" value={totalItems} icon="box" color="blue" sublabel="all SKUs" />
         <StatTile label="Low Stock" value={lowStock.length} icon="alert" color="amber" sublabel="need reorder" />
         <StatTile label="Out of Stock" value={outOfStock.length} icon="xCircle" color="red" sublabel="items" />
         <StatTile label="Inventory Value" value={formatMoney(totalValue)} icon="dollarSign" color="green" sublabel="qty × unit cost" />
       </div>
 
-      <div className="relative">
-        <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by drug or generic name…"
-          className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
-        />
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="relative flex-1">
+          <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name or generic name…"
+            className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+          />
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {PRODUCT_CATEGORIES.map((c) => (
+            <button
+              key={c.key}
+              onClick={() => setCategoryFilter(c.key)}
+              className={[
+                'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+                categoryFilter === c.key
+                  ? 'bg-[#1a6cbf] text-white'
+                  : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+              ].join(' ')}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {EXPIRY_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setExpiryFilter(f.key)}
+              className={[
+                'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+                expiryFilter === f.key
+                  ? 'bg-amber-600 text-white'
+                  : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+              ].join(' ')}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <Card className="overflow-hidden">
-        <CardHeader title="Pharmacy Stock" subtitle={`${filtered.length} of ${items.length} item${items.length === 1 ? '' : 's'}`}
+        <CardHeader
+          title="Product Stock"
+          subtitle={`${items.length} of ${totalItems} item${totalItems === 1 ? '' : 's'} loaded`}
           action={
-            <button onClick={() => setShowAddDrug(true)} className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5">
-              <Icon name="plus" size={14} /> Add Drug
+            <button
+              onClick={() => setShowAdd(true)}
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
+            >
+              <Icon name="plus" size={14} /> Add Item
             </button>
           }
         />
-        {filtered.length === 0 ? (
-          <EmptyState icon="pillBottle" title="No drugs found" description={search ? 'Try a different search term.' : 'Pharmacy stock will appear here.'} />
+        {items.length === 0 ? (
+          <EmptyState
+            icon="box"
+            title="No items found"
+            description={search || categoryFilter !== 'all' || expiryFilter !== 'all' ? 'Try adjusting your filters.' : 'Product stock will appear here once items are added.'}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
-                  <Th>Drug</Th>
+                  <Th>Item</Th>
                   <Th align="left" className="hidden md:table-cell">Category</Th>
                   <Th>Stock</Th>
                   <Th align="right" className="hidden lg:table-cell">Reorder</Th>
                   <Th align="right" className="hidden sm:table-cell">Unit Cost</Th>
                   <Th align="right" className="hidden sm:table-cell">Retail</Th>
-                  <Th align="left" className="hidden lg:table-cell">Expiry</Th>
+                  <Th align="left" className="hidden lg:table-cell">Nearest Batch</Th>
                   <Th align="center">Status</Th>
                   <Th align="right">Actions</Th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
-                {filtered.map((item) => {
+                {items.map((item) => {
                   const st = statusFor(item)
-                  const ex = expiryBadge(item.expiry_date)
-                  const retail = Number(item.normal_price) || 0  // OTC normal-tier sell price
+                  const nearest = getNearestBatch(item)
+                  const ex = nearest ? expiryBadge(nearest.expiry_date) : expiryBadge(null)
+                  const retail = Number(item.normal_price) || 0
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                       <td className="px-4 py-3">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.name}</p>
-                        <p className="text-[11px] text-gray-400">{item.generic_name || '—'}{item.strength ? ` · ${item.strength}` : ''}</p>
+                        {item.category === 'medication' && (
+                          <p className="text-[11px] text-gray-400">
+                            {item.generic_name || '—'}{item.strength ? ` · ${item.strength}` : ''}
+                          </p>
+                        )}
+                        {item.sub_category && (
+                          <Badge className="mt-0.5 bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400">
+                            {cap(item.sub_category)}
+                          </Badge>
+                        )}
                       </td>
                       <td className="px-4 py-3 hidden md:table-cell">
-                        <Badge className={CATEGORY_BADGES[item.category] || CATEGORY_BADGES.other}>{cap(item.category)}</Badge>
+                        <Badge className={CATEGORY_BADGES[item.category] || CATEGORY_BADGES.other}>
+                          {cap(item.category)}
+                        </Badge>
                       </td>
                       <td className="px-4 py-3"><StockBar item={item} /></td>
                       <td className="px-4 py-3 text-right text-[12px] text-gray-600 dark:text-gray-300 tabular-nums whitespace-nowrap hidden lg:table-cell">
                         {item.reorder_level} {item.unit}
                       </td>
-                      <td className="px-4 py-3 text-right text-[12px] text-gray-700 dark:text-gray-300 tabular-nums whitespace-nowrap hidden sm:table-cell">
-                        {formatMoney(item.unit_cost)}
-                      </td>
                       <td className="px-4 py-3 text-right text-[12px] text-emerald-700 dark:text-emerald-400 tabular-nums font-semibold whitespace-nowrap hidden sm:table-cell">
                         {formatMoney(retail)}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        <p className="text-[12px] text-gray-700 dark:text-gray-300">{formatDate(item.expiry_date)}</p>
-                        <Badge className={`mt-0.5 ${ex.cls}`}>{ex.label}</Badge>
+                        {nearest ? (
+                          <>
+                            <p className="text-[12px] text-gray-700 dark:text-gray-300">
+                              Batch {nearest.batch_number} · {formatDate(nearest.expiry_date)}
+                            </p>
+                            <Badge className={`mt-0.5 ${ex.cls}`}>{ex.label}</Badge>
+                          </>
+                        ) : (
+                          <span className="text-[12px] text-gray-400">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <Badge className={st.cls}>{st.label}</Badge>
@@ -559,11 +657,16 @@ function DrugStockSubTab() {
                         <div className="flex items-center justify-end gap-1">
                           <RowAction icon="plus" label="Restock" color="blue" onClick={() => setRestockItem(item)} />
                           <RowAction icon="edit" label="Edit" color="amber" onClick={() => setEditItem(item)} />
-                          <RowAction icon="trash" label="Delete" color="red" onClick={async () => {
-                            if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
-                            try { await delMut.mutateAsync(item.id); toast.success('Drug deleted') }
-                            catch (err) { toast.error(err.message || 'Could not delete drug') }
-                          }} />
+                          <RowAction
+                            icon="trash"
+                            label="Delete"
+                            color="red"
+                            onClick={async () => {
+                              if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
+                              try { await delMut.mutateAsync(item.id); toast.success('Item deleted') }
+                              catch (err) { toast.error(err.message || 'Could not delete item') }
+                            }}
+                          />
                         </div>
                       </td>
                     </tr>
@@ -573,69 +676,89 @@ function DrugStockSubTab() {
             </table>
           </div>
         )}
+
+        {hasNextPage && (
+          <div className="px-4 py-3 border-t border-gray-200 dark:border-gray-700/60 flex justify-center">
+            <button
+              onClick={() => fetchNextPage()}
+              disabled={isFetchingNextPage}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-50 flex items-center gap-2"
+            >
+              {isFetchingNextPage ? <Spinner size={14} /> : <Icon name="chevronDown" size={14} />}
+              {isFetchingNextPage ? 'Loading…' : 'Load More'}
+            </button>
+          </div>
+        )}
       </Card>
 
       {restockItem && (
         <RestockModal
-          title="Restock Drug"
+          title="Restock Item"
           subtitle={restockItem.name}
           item={restockItem}
           loading={restockMut.isPending}
           onClose={() => setRestockItem(null)}
-          onConfirm={async (qty) => {
+          onConfirm={async (qty, expiryDate) => {
             try {
-              await restockMut.mutateAsync({ id: restockItem.id, quantity: qty })
+              await restockMut.mutateAsync({
+                id: restockItem.id,
+                quantity: qty,
+                expiry_date: expiryDate || undefined,
+              })
               toast.success(`${restockItem.name} restocked (+${qty})`)
               setRestockItem(null)
             } catch (err) {
-              toast.error(err.message || 'Could not restock drug')
+              toast.error(err.message || 'Could not restock item')
             }
           }}
         />
       )}
 
       {editItem && (
-        <EditDrugItemModal
+        <EditProductItemModal
           item={editItem}
           loading={editMut.isPending}
           onClose={() => setEditItem(null)}
           onSubmit={async (body) => {
             try {
               await editMut.mutateAsync({ id: editItem.id, ...body })
-              toast.success('Drug updated')
+              toast.success('Item updated')
               setEditItem(null)
             } catch (err) {
-              toast.error(err.message || 'Could not update drug')
+              toast.error(err.message || 'Could not update item')
             }
           }}
         />
       )}
 
-      {showAddDrug && (
-        <AddDrugModal loading={false} onClose={() => setShowAddDrug(false)}
+      {showAdd && (
+        <AddProductModal
+          loading={false}
+          onClose={() => setShowAdd(false)}
           onSubmit={async (body) => {
             try {
               await api.post('/api/admin/drug-stock', {
                 name: body.name,
-                generic_name: body.generic_name,
+                generic_name: body.generic_name || null,
                 category: body.category,
-                form: body.form,
-                strength: body.strength,
+                sub_category: body.sub_category || null,
+                form: body.form || null,
+                strength: body.strength || null,
                 current_stock: Number(body.quantity),
                 unit: body.unit,
                 reorder_level: Number(body.reorder_level) || 0,
-                unit_cost: Number(body.unit_cost) || 0,
                 normal_price: Number(body.normal_price) || 0,
                 promotional_price: Number(body.promotional_price) || 0,
                 wholesale_price: Number(body.wholesale_price) || 0,
                 supplier: body.supplier || null,
                 expiry_date: body.expiry_date || null,
-                batch_number: body.batch_number || null,
               })
-              toast.success(`${body.name} added to drug inventory`)
+              toast.success(`${body.name} added to inventory`)
               queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] })
-              setShowAddDrug(false)
-            } catch (err) { toast.error(err.message || 'Could not add drug') }
+              setShowAdd(false)
+            } catch (err) {
+              toast.error(err.message || 'Could not add item')
+            }
           }}
         />
       )}
@@ -643,9 +766,10 @@ function DrugStockSubTab() {
   )
 }
 
-// ─── Restock modal (lab + drug) ──────────────────────────────────
+// ─── Restock modal (product + lab) ──────────────────────────────────
 function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
   const [quantity, setQuantity] = useState(Math.max(1, Math.ceil((Number(item.reorder_level) || 10) * 1.5)))
+  const [expiryDate, setExpiryDate] = useState('')
 
   const qty = Number(quantity) || 0
   const newStock = (Number(item.current_stock) || 0) + qty
@@ -658,19 +782,34 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
       onClose={loading ? undefined : onClose}
       footer={
         <>
-          <button type="button" onClick={onClose} disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          >
             Cancel
           </button>
-          <button type="submit" form="restock-form" disabled={!valid || loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
+          <button
+            type="submit"
+            form="restock-form"
+            disabled={!valid || loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50"
+          >
             {loading ? <Spinner size={14} /> : <Icon name="plus" size={14} />}
             {loading ? 'Restocking…' : 'Restock'}
           </button>
         </>
       }
     >
-      <form id="restock-form" onSubmit={(e) => { e.preventDefault(); if (valid && !loading) onConfirm(qty) }} className="space-y-4">
+      <form
+        id="restock-form"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (valid && !loading) onConfirm(qty, expiryDate)
+        }}
+        className="space-y-4"
+      >
         <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 border border-gray-200 dark:border-gray-700/60 p-3 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-gray-500 dark:text-gray-400">Current stock</span>
@@ -687,7 +826,7 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-gray-500 dark:text-gray-400">Unit cost</span>
             <span className="text-[12px] font-semibold tabular-nums text-gray-900 dark:text-gray-100">
-              {formatMoney(item.unit_cost)}
+              {formatMoney(item.normal_price)}
             </span>
           </div>
           {item.supplier && (
@@ -728,6 +867,18 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
           </div>
         </Field>
 
+        <Field label="Expiry Date">
+          <input
+            type="date"
+            value={expiryDate}
+            onChange={(e) => setExpiryDate(e.target.value)}
+            className={inputCls}
+          />
+          <p className="text-[10px] text-gray-400 mt-1">
+            A new batch will be created automatically. Leave blank if no expiry.
+          </p>
+        </Field>
+
         <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 space-y-1.5">
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-gray-500 dark:text-gray-400">New stock level</span>
@@ -738,7 +889,7 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
           <div className="flex items-center justify-between">
             <span className="text-[11px] text-gray-500 dark:text-gray-400">New stock value (at cost)</span>
             <span className="text-[12px] font-semibold tabular-nums text-[#1a6cbf] dark:text-blue-400">
-              {formatMoney(newStock * (Number(item.unit_cost) || 0))}
+              {formatMoney(newStock * (Number(item.normal_price) || 0))}
             </span>
           </div>
         </div>
@@ -747,84 +898,95 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
   )
 }
 
-// ─── Edit lab item modal (name/reorder/expiry) ──────────────────
-function EditLabItemModal({ item, loading, onClose, onSubmit }) {
-  const [name, setName] = useState(item.name || '')
-  const [reorderLevel, setReorderLevel] = useState(String(item.reorder_level || 0))
-  const [expiryDate, setExpiryDate] = useState(
-    item.expiry_date ? new Date(item.expiry_date).toISOString().slice(0, 10) : ''
-  )
+// ─── Edit product item modal ────────────────────────────────────
+function EditProductItemModal({ item, loading, onClose, onSubmit }) {
+  const [form, setForm] = useState({
+    name: item.name || '',
+    reorder_level: String(item.reorder_level ?? 0),
+    normal_price: String(item.normal_price ?? 0),
+    promotional_price: String(item.promotional_price ?? 0),
+    wholesale_price: String(item.wholesale_price ?? 0),
+    supplier: item.supplier || '',
+  })
+  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!name.trim()) {
-      toast.error('Name is required')
-      return
-    }
-    const rl = Number(reorderLevel)
-    if (!Number.isFinite(rl) || rl < 0) {
-      toast.error('Reorder level must be a non-negative number')
-      return
-    }
+    if (!form.name.trim()) { toast.error('Item name is required'); return }
+    const rl = Number(form.reorder_level)
+    if (!Number.isFinite(rl) || rl < 0) { toast.error('Reorder level must be a non-negative number'); return }
     await onSubmit({
-      name: name.trim(),
+      name: form.name.trim(),
       reorder_level: rl,
-      expiry_date: expiryDate ? new Date(expiryDate).toISOString() : null,
+      normal_price: Number(form.normal_price) || 0,
+      promotional_price: Number(form.promotional_price) || 0,
+      wholesale_price: Number(form.wholesale_price) || 0,
+      supplier: form.supplier.trim() || null,
     })
   }
 
   return (
     <ModalShell
-      title="Edit Lab Item"
+      title="Edit Item"
       subtitle={item.name}
       onClose={loading ? undefined : onClose}
+      maxWidth="max-w-lg"
       footer={
         <>
-          <button type="button" onClick={onClose} disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          >
             Cancel
           </button>
-          <button type="submit" form="edit-lab-form" disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
+          <button
+            type="submit"
+            form="edit-product-form"
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50"
+          >
             {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
             {loading ? 'Saving…' : 'Save Changes'}
           </button>
         </>
       }
     >
-      <form id="edit-lab-form" onSubmit={handleSubmit} className="space-y-4">
+      <form id="edit-product-form" onSubmit={handleSubmit} className="space-y-3">
         <Field label="Item Name *">
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={inputCls}
-            autoFocus
-          />
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} className={inputCls} autoFocus />
         </Field>
+
         <div className="grid grid-cols-2 gap-3">
           <Field label="Reorder Level *">
-            <input
-              type="number"
-              min="0"
-              value={reorderLevel}
-              onChange={(e) => setReorderLevel(e.target.value)}
-              className={`${inputCls} tabular-nums`}
-            />
-          </Field>
-          <Field label="Expiry Date">
-            <input
-              type="date"
-              value={expiryDate}
-              onChange={(e) => setExpiryDate(e.target.value)}
-              className={inputCls}
-            />
+            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
           </Field>
         </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Normal Price (KSh)">
+            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Promotional (KSh)">
+            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Wholesale (KSh)">
+            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+
+        <Field label="Supplier">
+          <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} className={inputCls} />
+        </Field>
+
         <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
           <Icon name="info" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
           <p className="text-[11px] text-amber-700 dark:text-amber-400">
-            Quantity adjustments are made via the Restock action. Use the Edit form for name, reorder threshold, and expiry only.
+            Stock quantity is changed via the Restock action, not here. Batches are created automatically on restock.
           </p>
         </div>
       </form>
@@ -832,130 +994,127 @@ function EditLabItemModal({ item, loading, onClose, onSubmit }) {
   )
 }
 
-// ─── Edit drug item modal (metadata + price tiers, NOT stock) ────
-function EditDrugItemModal({ item, loading, onClose, onSubmit }) {
+// ─── Add Product Modal ──────────────────────────────────────────
+function AddProductModal({ loading, onClose, onSubmit }) {
   const [form, setForm] = useState({
-    name: item.name || '',
-    generic_name: item.generic_name || '',
-    category: item.category || 'general',
-    form: item.form || 'tablet',
-    strength: item.strength || '',
-    unit: item.unit || 'tablets',
-    reorder_level: String(item.reorder_level ?? 0),
-    unit_cost: String(item.unit_cost ?? 0),
-    normal_price: String(item.normal_price ?? 0),
-    promotional_price: String(item.promotional_price ?? 0),
-    wholesale_price: String(item.wholesale_price ?? 0),
-    supplier: item.supplier || '',
-    batch_number: item.batch_number || '',
-    expiry_date: item.expiry_date ? new Date(item.expiry_date).toISOString().slice(0, 10) : '',
+    name: '',
+    category: 'general',
+    sub_category: '',
+    generic_name: '',
+    form: 'tablet',
+    strength: '',
+    quantity: '',
+    unit: 'pieces',
+    reorder_level: '50',
+    normal_price: '',
+    promotional_price: '',
+    wholesale_price: '',
+    supplier: '',
+    expiry_date: '',
   })
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!form.name.trim()) { toast.error('Drug name is required'); return }
-    const rl = Number(form.reorder_level)
-    if (!Number.isFinite(rl) || rl < 0) { toast.error('Reorder level must be a non-negative number'); return }
-    await onSubmit({
-      name: form.name.trim(),
-      generic_name: form.generic_name.trim(),
-      category: form.category,
-      form: form.form,
-      strength: form.strength,
-      unit: form.unit,
-      reorder_level: rl,
-      unit_cost: Number(form.unit_cost) || 0,
-      normal_price: Number(form.normal_price) || 0,
-      promotional_price: Number(form.promotional_price) || 0,
-      wholesale_price: Number(form.wholesale_price) || 0,
-      supplier: form.supplier,
-      batch_number: form.batch_number,
-      expiry_date: form.expiry_date ? new Date(form.expiry_date).toISOString() : null,
-    })
-  }
+  const valid = form.name.trim() && form.quantity !== ''
 
   return (
     <ModalShell
-      title="Edit Drug"
-      subtitle={item.name}
-      onClose={loading ? undefined : onClose}
+      title="Add Item to Inventory"
+      subtitle="Create a new product, consumable, or medication"
+      onClose={onClose}
       maxWidth="max-w-lg"
       footer={
-        <>
-          <button type="button" onClick={onClose} disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          >
             Cancel
           </button>
-          <button type="submit" form="edit-drug-form" disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
-            {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
-            {loading ? 'Saving…' : 'Save Changes'}
+          <button
+            onClick={() => onSubmit(form)}
+            disabled={loading || !valid}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2"
+          >
+            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Item
           </button>
-        </>
+        </div>
       }
     >
-      <form id="edit-drug-form" onSubmit={handleSubmit} className="space-y-3">
-        <Field label="Drug Name *">
-          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} className={inputCls} autoFocus />
+      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
+        <Field label="Item Name *">
+          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Surgical Gloves" className={inputCls} autoFocus />
         </Field>
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Generic Name">
-            <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} className={inputCls} />
-          </Field>
-          <Field label="Category">
+          <Field label="Category *">
             <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
-              {optionsFrom(DRUG_CATEGORIES)}
+              <option value="medication">Medication</option>
+              <option value="consumable">Consumable</option>
+              <option value="general">General</option>
             </select>
           </Field>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Form">
-            <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
-              {optionsFrom(DRUG_FORMS)}
-            </select>
-          </Field>
-          <Field label="Strength">
-            <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
-          </Field>
-          <Field label="Unit">
-            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} className={inputCls} />
+          <Field label="Sub-category" hint="Optional">
+            <input type="text" value={form.sub_category} onChange={(e) => set('sub_category', e.target.value)} placeholder="e.g. ppe, antibiotic" className={inputCls} />
           </Field>
         </div>
+
+        {form.category === 'medication' && (
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Generic Name">
+              <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} placeholder="e.g. Amoxicillin" className={inputCls} />
+            </Field>
+            <Field label="Form">
+              <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
+                {optionsFrom(MEDICATION_FORMS)}
+              </select>
+            </Field>
+            <Field label="Strength">
+              <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
+            </Field>
+          </div>
+        )}
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Reorder Level *">
+          <Field label="Quantity *">
+            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Reorder Level">
             <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
           </Field>
-          <Field label="Unit Cost (KSh)" hint="Buying / cost price">
-            <input type="number" min="0" step="any" value={form.unit_cost} onChange={(e) => set('unit_cost', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </Field>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Normal (KSh)">
-            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </Field>
-          <Field label="Promotional">
-            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </Field>
-          <Field label="Wholesale">
-            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </Field>
-        </div>
+
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Supplier">
-            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} className={inputCls} />
+          <Field label="Unit">
+            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} placeholder="pieces, vials, boxes" className={inputCls} />
           </Field>
-          <Field label="Batch Number">
-            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} className={inputCls} />
+          <Field label="Expiry Date">
+            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
           </Field>
         </div>
-        <Field label="Expiry Date">
-          <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Normal Price (KSh)" hint="OTC price">
+            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Promotional (KSh)">
+            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+          <Field label="Wholesale (KSh)">
+            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          </Field>
+        </div>
+
+        <Field label="Supplier">
+          <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Phillips Pharma" className={inputCls} />
         </Field>
-        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
-          <Icon name="info" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-amber-700 dark:text-amber-400">
-            Stock quantity is changed via the Restock action, not here. The clinic prescription price is computed at billing from the Normal price × (1 + markup %).
+
+        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-start gap-2">
+          <Icon name="info" size={14} className="text-[#1a6cbf] dark:text-blue-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-gray-600 dark:text-gray-300">
+            The first batch (Batch 1) will be created automatically with the quantity and expiry you enter here. Future restocks auto-increment the batch number.
           </p>
         </div>
       </form>
@@ -967,7 +1126,7 @@ function EditDrugItemModal({ item, loading, onClose, onSubmit }) {
 function AddLabItemModal({ loading, onClose, onSubmit }) {
   const [form, setForm] = useState({
     name: '', category: 'supplies', quantity: '', unit: 'vials',
-    reorder_level: '10', unit_cost: '', supplier: '', expiry_date: '', batch_number: '',
+    reorder_level: '10', supplier: '', expiry_date: '', batch_number: '',
   })
   const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
   const valid = form.name.trim() && form.quantity !== ''
@@ -1008,102 +1167,69 @@ function AddLabItemModal({ loading, onClose, onSubmit }) {
             <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Batch Number">
-            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. HB-25-03" className={inputCls} />
-          </Field>
-        </div>
+        <Field label="Supplier">
+          <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. LabSource Ltd" className={inputCls} />
+        </Field>
       </form>
     </ModalShell>
   )
 }
 
-// ─── Add Drug Modal ──────────────────────────────────────────────
-function AddDrugModal({ loading, onClose, onSubmit }) {
-  const [form, setForm] = useState({
-    name: '', generic_name: '', category: 'antibiotic', form: 'tablet', strength: '',
-    quantity: '', unit: 'tablets', reorder_level: '50',
-    unit_cost: '', normal_price: '', promotional_price: '', wholesale_price: '',
-    supplier: '', expiry_date: '', batch_number: '',
-  })
-  const set = (k, v) => setForm((p) => ({ ...p, [k]: v }))
-  const valid = form.name.trim() && form.quantity !== ''
+// ─── Edit lab item modal ────────────────────────────────────────
+function EditLabItemModal({ item, loading, onClose, onSubmit }) {
+  const [name, setName] = useState(item.name || '')
+  const [reorderLevel, setReorderLevel] = useState(String(item.reorder_level || 0))
+  const [expiryDate, setExpiryDate] = useState(
+    item.expiry_date ? new Date(item.expiry_date).toISOString().slice(0, 10) : ''
+  )
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    if (!name.trim()) { toast.error('Name is required'); return }
+    const rl = Number(reorderLevel)
+    if (!Number.isFinite(rl) || rl < 0) { toast.error('Reorder level must be a non-negative number'); return }
+    await onSubmit({
+      name: name.trim(),
+      reorder_level: rl,
+      expiry_date: expiryDate ? new Date(expiryDate).toISOString() : null,
+    })
+  }
+
   return (
-    <ModalShell title="Add Drug to Inventory" subtitle="Create a new pharmacy stock item" onClose={onClose} maxWidth="max-w-lg"
+    <ModalShell
+      title="Edit Lab Item"
+      subtitle={item.name}
+      onClose={loading ? undefined : onClose}
       footer={
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
-          <button onClick={() => onSubmit(form)} disabled={loading || !valid} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50 flex items-center gap-2">
-            {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="plus" size={14} />} Add Drug
+        <>
+          <button type="button" onClick={onClose} disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
+            Cancel
           </button>
-        </div>
-      }>
-      <form onSubmit={(e) => { e.preventDefault(); if (valid) onSubmit(form) }} className="space-y-3">
-        <Field label="Drug Name *">
-          <input type="text" value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="e.g. Amoxicillin 500mg" className={inputCls} autoFocus />
+          <button type="submit" form="edit-lab-form" disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
+            {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
+            {loading ? 'Saving…' : 'Save Changes'}
+          </button>
+        </>
+      }
+    >
+      <form id="edit-lab-form" onSubmit={handleSubmit} className="space-y-4">
+        <Field label="Item Name *">
+          <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={inputCls} autoFocus />
         </Field>
         <div className="grid grid-cols-2 gap-3">
-          <Field label="Generic Name">
-            <input type="text" value={form.generic_name} onChange={(e) => set('generic_name', e.target.value)} placeholder="e.g. Amoxicillin" className={inputCls} />
-          </Field>
-          <Field label="Category">
-            <select value={form.category} onChange={(e) => set('category', e.target.value)} className={inputCls}>
-              {optionsFrom(DRUG_CATEGORIES)}
-            </select>
-          </Field>
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Form">
-            <select value={form.form} onChange={(e) => set('form', e.target.value)} className={inputCls}>
-              {optionsFrom(DRUG_FORMS)}
-            </select>
-          </Field>
-          <Field label="Strength">
-            <input type="text" value={form.strength} onChange={(e) => set('strength', e.target.value)} placeholder="e.g. 500mg" className={inputCls} />
-          </Field>
-          <Field label="Unit">
-            <input type="text" value={form.unit} onChange={(e) => set('unit', e.target.value)} className={inputCls} />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Quantity *">
-            <input type="number" min="0" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </Field>
-          <Field label="Reorder Level">
-            <input type="number" min="0" value={form.reorder_level} onChange={(e) => set('reorder_level', e.target.value)} className={`${inputCls} tabular-nums`} />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Unit Cost (KSh)" hint="Buying / cost price">
-            <input type="number" min="0" step="any" value={form.unit_cost} onChange={(e) => set('unit_cost', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
+          <Field label="Reorder Level *">
+            <input type="number" min="0" value={reorderLevel} onChange={(e) => setReorderLevel(e.target.value)} className={`${inputCls} tabular-nums`} />
           </Field>
           <Field label="Expiry Date">
-            <input type="date" value={form.expiry_date} onChange={(e) => set('expiry_date', e.target.value)} className={inputCls} />
+            <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
           </Field>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Normal (KSh)" hint="OTC price">
-            <input type="number" min="0" step="any" value={form.normal_price} onChange={(e) => set('normal_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </Field>
-          <Field label="Promotional">
-            <input type="number" min="0" step="any" value={form.promotional_price} onChange={(e) => set('promotional_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </Field>
-          <Field label="Wholesale">
-            <input type="number" min="0" step="any" value={form.wholesale_price} onChange={(e) => set('wholesale_price', e.target.value)} placeholder="0" className={`${inputCls} tabular-nums`} />
-          </Field>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Supplier">
-            <input type="text" value={form.supplier} onChange={(e) => set('supplier', e.target.value)} placeholder="e.g. Phillips Pharma" className={inputCls} />
-          </Field>
-          <Field label="Batch Number">
-            <input type="text" value={form.batch_number} onChange={(e) => set('batch_number', e.target.value)} placeholder="e.g. AMX2025-04" className={inputCls} />
-          </Field>
-        </div>
-        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-start gap-2">
-          <Icon name="info" size={14} className="text-[#1a6cbf] dark:text-blue-400 mt-0.5 shrink-0" />
-          <p className="text-[11px] text-gray-600 dark:text-gray-300">
-            Normal / Promotional / Wholesale are the three OTC sale tiers. The clinic prescription price is computed at billing from Normal × (1 + markup %) — it is not stored here.
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
+          <Icon name="info" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            Quantity adjustments are made via the Restock action. Use the Edit form for name, reorder threshold, and expiry only.
           </p>
         </div>
       </form>
@@ -1111,7 +1237,7 @@ function AddDrugModal({ loading, onClose, onSubmit }) {
   )
 }
 
-// ─── Sub-tab 4: Restock Verification ─────────────────────────────
+// ─── Sub-tab 3: Restock Verification ────────────────────────────
 function RestockVerificationSubTab() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
@@ -1153,10 +1279,11 @@ function RestockVerificationSubTab() {
   const stats = q.data?.stats || {}
   const filtered = filter === 'all' ? all : all.filter((r) => r.status === filter)
 
-  const handleVerify = async (r, notes, qty) => {
+  const handleVerify = async (r, notes, qty, expiryDate) => {
     try {
       const body = { verification_notes: notes }
       if (qty != null && Number(qty) !== r.received_qty) body.adjusted_qty = Number(qty)
+      if (expiryDate) body.expiry_date = expiryDate
       await verifyMut.mutateAsync({ id: r.id, body })
       toast.success(`${r.item_name} verified — stock added`)
       setVerifying(null)
@@ -1212,18 +1339,14 @@ function RestockVerificationSubTab() {
                         <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{r.item_name}</p>
                         <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-300">{cap(r.department)}</Badge>
                         <Badge className={badgeClass(r.status)}>{cap(r.status)}</Badge>
-                        {r.direct_restock && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Direct</Badge>}
                       </div>
                       <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
                         Requested by {r.requested_by} · {timeAgo(r.requested_at)}
                       </p>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 text-[11px]">
                         <div><span className="text-gray-400">Current:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.current_stock}</span></div>
-                        <div><span className="text-gray-400">Received:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.received_qty}</span></div>
-                        <div><span className="text-gray-400">Unit cost:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{formatMoney(r.unit_cost)}</span></div>
-                        <div><span className="text-gray-400">Total:</span> <span className="font-semibold text-gray-900 dark:text-gray-100">{formatMoney(r.unit_cost * r.received_qty)}</span></div>
+                        <div><span className="text-gray-400">Requested:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.quantity}</span></div>
                         <div><span className="text-gray-400">Supplier:</span> <span className="text-gray-700 dark:text-gray-300">{r.supplier || '—'}</span></div>
-                        <div><span className="text-gray-400">Batch:</span> <span className="text-gray-700 dark:text-gray-300">{r.batch_number || '—'}</span></div>
                         <div><span className="text-gray-400">Expiry:</span> <span className="text-gray-700 dark:text-gray-300">{formatDate(r.expiry_date)}</span></div>
                       </div>
                       {r.notes && <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 italic">"{r.notes}"</p>}
@@ -1264,13 +1387,17 @@ function RestockVerificationSubTab() {
 
 function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
   const [notes, setNotes] = useState('')
-  const [qty, setQty] = useState(String(restock.received_qty))
+  const [qty, setQty] = useState(String(restock.received_qty || restock.quantity || 0))
+  const [expiryDate, setExpiryDate] = useState(
+    restock.expiry_date ? new Date(restock.expiry_date).toISOString().slice(0, 10) : ''
+  )
+
   return (
     <ModalShell title="Verify Restock" subtitle={`${restock.item_name} · ${cap(restock.department)}`} onClose={loading ? undefined : onClose}
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
-          <button onClick={() => onConfirm(restock, notes, qty)} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 disabled:opacity-50">
+          <button onClick={() => onConfirm(restock, notes, qty, expiryDate)} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 disabled:opacity-50">
             {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="check" size={14} />} Approve & Add to Stock
           </button>
         </div>
@@ -1278,17 +1405,22 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
       <div className="space-y-3">
         <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 p-3 space-y-1.5 text-[12px]">
           <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock}</span></div>
-          <div className="flex justify-between"><span className="text-gray-400">Requested:</span><span className="font-medium">{restock.requested_qty}</span></div>
+          <div className="flex justify-between"><span className="text-gray-400">Requested qty:</span><span className="font-medium">{restock.quantity}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Supplier:</span><span className="font-medium">{restock.supplier || '—'}</span></div>
         </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Quantity to add (adjust if different)</label>
+
+        <Field label="Quantity to add (adjust if different)">
           <input type="number" min="0" value={qty} onChange={(e) => setQty(e.target.value)} className={`${inputCls} tabular-nums`} />
-        </div>
-        <div>
-          <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Verification notes</label>
+        </Field>
+
+        <Field label="Expiry Date">
+          <input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} className={inputCls} />
+          <p className="text-[10px] text-gray-400 mt-1">Batch number will be auto-generated.</p>
+        </Field>
+
+        <Field label="Verification notes">
           <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. Verified against PO #1234" className={`${inputCls} resize-none`} />
-        </div>
+        </Field>
       </div>
     </ModalShell>
   )
@@ -1309,8 +1441,9 @@ function RestockRejectModal({ restock, loading, onClose, onConfirm }) {
       <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-3 text-[12px] text-red-700 dark:text-red-400 mb-3">
         No stock will be added. The requesting department will need to follow up with the supplier.
       </div>
-      <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">Reason for rejection *</label>
-      <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="e.g. Wrong quantity received, damaged packaging..." className={`${inputCls} resize-none`} />
+      <Field label="Reason for rejection *">
+        <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="e.g. Wrong quantity received, damaged packaging..." className={`${inputCls} resize-none`} />
+      </Field>
     </ModalShell>
   )
 }

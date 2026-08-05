@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
@@ -179,6 +179,157 @@ function ConfirmModal({ open, title, description, confirmLabel = 'Confirm', onCo
         </div>
       </div>
     </div>
+  )
+}
+
+// ─── Inline Price Editor (from File 1) ─────────────────────────────────────
+
+function InlinePrice({ value, onSave, isPending }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(String(value))
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.select()
+  }, [editing])
+
+  const submit = () => {
+    const num = Number(draft)
+    if (!Number.isFinite(num) || num < 0) {
+      toast.error('Invalid price')
+      setDraft(String(value))
+    } else if (num !== value) {
+      onSave(num)
+    }
+    setEditing(false)
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        disabled={isPending}
+        className="text-[13px] font-semibold text-gray-700 dark:text-gray-200 tabular-nums hover:bg-gray-100 dark:hover:bg-gray-700/40 rounded px-1.5 py-0.5 transition-colors disabled:opacity-50"
+        title="Click to edit"
+      >
+        {isPending ? <Spinner size={12} /> : formatMoney(value)}
+      </button>
+    )
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="number"
+      min="0"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={submit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') submit()
+        if (e.key === 'Escape') {
+          setDraft(String(value))
+          setEditing(false)
+        }
+      }}
+      className={`${inputCls} w-28 text-right tabular-nums py-1 px-2 text-[13px]`}
+      autoFocus
+    />
+  )
+}
+
+// ─── Table Toggle (File 1 style for inline tables) ─────────────────────────
+
+function TableToggle({ checked, onChange, disabled }) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      disabled={disabled}
+      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+        checked ? 'bg-[#1a6cbf]' : 'bg-gray-300 dark:bg-gray-600'
+      } disabled:opacity-50`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+          checked ? 'translate-x-5' : 'translate-x-1'
+        }`}
+      />
+    </button>
+  )
+}
+
+// ─── Inline Add Row (File 1 style) ───────────────────────────────────────────
+
+function InlineAddRow({ onSave, onCancel, loading }) {
+  const [name, setName] = useState('')
+  const [category, setCategory] = useState('consultation')
+  const [amount, setAmount] = useState('')
+
+  const submit = () => {
+    const amt = Number(amount)
+    if (!name.trim()) return toast.error('Name is required')
+    if (!Number.isFinite(amt) || amt < 0) return toast.error('Invalid amount')
+    onSave({ name: name.trim(), category, amount: Math.round(amt), is_active: true })
+  }
+
+  return (
+    <tr className="bg-blue-50/50 dark:bg-blue-950/20">
+      <td className="px-4 py-3">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Service name"
+          className={`${inputCls} py-1.5 px-2 text-[13px]`}
+          autoFocus
+          onKeyDown={(e) => e.key === 'Enter' && submit()}
+        />
+      </td>
+      <td className="px-4 py-3">
+        <select
+          value={category}
+          onChange={(e) => setCategory(e.target.value)}
+          className={`${inputCls} py-1.5 px-2 text-[13px] w-full`}
+        >
+          {TEMPLATE_CATEGORIES.map((c) => (
+            <option key={c.key} value={c.key}>{c.label}</option>
+          ))}
+        </select>
+      </td>
+      <td className="px-4 py-3 text-right">
+        <input
+          type="number"
+          min="0"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          placeholder="0"
+          className={`${inputCls} py-1.5 px-2 text-[13px] w-28 text-right tabular-nums`}
+          onKeyDown={(e) => e.key === 'Enter' && submit()}
+        />
+      </td>
+      <td className="px-4 py-3 text-center">
+        <span className="text-[11px] text-gray-400">Active</span>
+      </td>
+      <td className="px-4 py-3 text-right">
+        <div className="flex items-center justify-end gap-1">
+          <button
+            onClick={submit}
+            disabled={loading}
+            className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400 hover:bg-emerald-200"
+          >
+            {loading ? <Spinner size={12} /> : <Icon name="check" size={12} />}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={loading}
+            className="px-2 py-1.5 rounded-md text-[11px] font-medium bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400 hover:bg-gray-200"
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      </td>
+    </tr>
   )
 }
 
@@ -450,177 +601,291 @@ function PharmacySettingsTab() {
   )
 }
 
-// ─── Sub-tab 3: Charge Templates ─────────────────────────────────
+// ─── Sub-tab 3: Charge Templates (merged Clinic Fees + Lab Tests) ────────────
+
 function ChargeTemplatesTab() {
   const queryClient = useQueryClient()
-  const [showAdd, setShowAdd] = useState(false)
-  const [editingId, setEditingId] = useState(null)
+  const [adding, setAdding] = useState(false)
 
+  // ── Clinic Fees (Charge Templates) ──
   const q = useQuery({
     queryKey: ['admin', 'charge-templates'],
     queryFn: () => api.get('/api/admin/charge-templates'),
-    staleTime: 60000,
+    staleTime: 30000,
+  })
+
+  const updateMut = useMutation({
+    mutationFn: ({ id, body }) => api.patch(`/api/admin/charge-templates/${id}`, body),
+    onMutate: async ({ id, body }) => {
+      await queryClient.cancelQueries({ queryKey: ['admin', 'charge-templates'] })
+      const prev = queryClient.getQueryData(['admin', 'charge-templates'])
+      queryClient.setQueryData(['admin', 'charge-templates'], (old) => {
+        if (!old?.templates) return old
+        return {
+          ...old,
+          templates: old.templates.map((t) => (t.id === id ? { ...t, ...body } : t)),
+        }
+      })
+      return { prev }
+    },
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['admin', 'charge-templates'], ctx.prev)
+      toast.error(err.message || 'Failed to update')
+    },
+    onSuccess: () => toast.success('Updated'),
   })
 
   const addMut = useMutation({
-    mutationFn: (body) => api.post('/api/admin/charge-templates', {
-      name: body.name, category: body.category, amount: Number(body.price), is_active: body.is_active,
-    }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
-  })
-  const editMut = useMutation({
-    mutationFn: ({ id, body }) => {
-      const patch = {}
-      if (body.price != null) patch.amount = Number(body.price)
-      if (body.is_active != null) patch.is_active = body.is_active
-      if (body.name != null) patch.name = body.name
-      if (body.category != null) patch.category = body.category
-      return api.patch(`/api/admin/charge-templates/${id}`, patch)
+    mutationFn: (body) => api.post('/api/admin/charge-templates', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] })
+      toast.success('Service added')
+      setAdding(false)
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
+    onError: (e) => toast.error(e.message || 'Failed to add'),
   })
+
   const delMut = useMutation({
     mutationFn: (id) => api.delete(`/api/admin/charge-templates/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'charge-templates'] })
+      toast.success('Deleted')
+    },
+    onError: (e) => toast.error(e.message || 'Failed to delete'),
   })
 
-  if (q.isLoading) {
-    return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
-        </div>
-        <SkeletonTable rows={6} cols={5} />
-      </div>
-    )
-  }
-  if (q.isError) {
-    return <ErrorState message={q.error?.message || 'Could not load charge templates'} onRetry={q.refetch} />
-  }
+  // ── Lab Tests ──
+  const [search, setSearch] = useState('')
+  const [labCategory, setLabCategory] = useState('all')
 
-  // Single ChargeTemplate table. Alias amount -> price for the existing UI.
-  const templates = Array.isArray(q.data?.templates) ? q.data.templates : []
-  const all = templates.map((t) => ({ ...t, price: t.amount }))
-
-  // Group by category
-  const groups = {}
-  for (const t of all) {
-    const key = t.category || 'other'
-    if (!groups[key]) groups[key] = []
-    groups[key].push(t)
-  }
-  const groupOrder = ['consultation', 'procedure', 'lab', 'medication']
-  const sortedGroups = Object.entries(groups).sort((a, b) => {
-    const ai = groupOrder.indexOf(a[0])
-    const bi = groupOrder.indexOf(b[0])
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+  const labQ = useQuery({
+    queryKey: ['admin', 'lab-catalog'],
+    queryFn: () => api.get('/api/admin/lab-catalog'),
+    staleTime: 30000,
   })
 
-  const activeCount = all.filter((t) => t.is_active).length
-  const avg = all.length ? all.reduce((s, t) => s + (Number(t.price) || 0), 0) / all.length : 0
+  const labUpdateMut = useMutation({
+    mutationFn: ({ id, body }) => api.patch(`/api/admin/lab-catalog/${id}`, body),
+    onMutate: async ({ id, body }) => {
+      await queryClient.cancelQueries({ queryKey: ['admin', 'lab-catalog'] })
+      const prev = queryClient.getQueryData(['admin', 'lab-catalog'])
+      queryClient.setQueryData(['admin', 'lab-catalog'], (old) => {
+        if (!old?.tests) return old
+        return {
+          ...old,
+          tests: old.tests.map((t) => (t.id === id ? { ...t, ...body } : t)),
+        }
+      })
+      return { prev }
+    },
+    onError: (err, _v, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['admin', 'lab-catalog'], ctx.prev)
+      toast.error(err.message || 'Failed to update')
+    },
+    onSuccess: () => toast.success('Updated'),
+  })
+
+  const templates = q.data?.templates || []
+  const allTests = labQ.data?.tests || []
+
+  const categories = useMemo(() => {
+    const set = new Set(allTests.map((t) => t.category).filter(Boolean))
+    return Array.from(set).sort()
+  }, [allTests])
+
+  const filteredTests = useMemo(() => {
+    return allTests.filter((t) => {
+      const matchesSearch = !search || t.name.toLowerCase().includes(search.toLowerCase())
+      const matchesCat = labCategory === 'all' || t.category === labCategory
+      return matchesSearch && matchesCat
+    })
+  }, [allTests, search, labCategory])
+
+  // Stats
+  const activeCount = templates.filter((t) => t.is_active).length
+  const avg = templates.length
+    ? templates.reduce((s, t) => s + (Number(t.amount) || 0), 0) / templates.length
+    : 0
 
   return (
     <div className="space-y-4">
+      {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Total Templates" value={all.length} icon="tag" color="blue" sublabel="chargeable services" />
+        <StatTile label="Total Templates" value={templates.length} icon="tag" color="blue" sublabel="chargeable services" />
         <StatTile label="Active" value={activeCount} icon="checkCircle" color="green" sublabel="available for billing" />
-        <StatTile label="Inactive" value={all.length - activeCount} icon="archive" color="slate" sublabel="hidden from billing" />
+        <StatTile label="Inactive" value={templates.length - activeCount} icon="archive" color="slate" sublabel="hidden from billing" />
         <StatTile label="Avg Charge" value={formatMoney(avg)} icon="dollarSign" color="amber" sublabel="across all templates" />
       </div>
 
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-[12px] text-gray-500 dark:text-gray-400">
-          {sortedGroups.length} categor{sortedGroups.length === 1 ? 'y' : 'ies'} · inline-edit amount, toggle active, or delete
-        </p>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center gap-1.5"
-        >
-          <Icon name="plus" size={14} /> Add Template
-        </button>
-      </div>
-
-      {sortedGroups.length === 0 ? (
-        <EmptyState icon="tag" title="No charge templates" description="Add your first chargeable service to get started." />
-      ) : (
-        <div className="space-y-4">
-          {sortedGroups.map(([cat, items]) => (
-            <Card key={cat} className="overflow-hidden">
-              <CardHeader
-                title={cap(cat)}
-                subtitle={`${items.length} template${items.length === 1 ? '' : 's'}`}
-                action={<Badge className={CATEGORY_BADGES[cat] || CATEGORY_BADGES.other}>{cap(cat)}</Badge>}
-              />
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
-                      <Th>Name</Th>
-                      <Th align="left" className="hidden sm:table-cell">Category</Th>
-                      <Th align="right">Amount</Th>
-                      <Th align="center">Active</Th>
-                      <Th align="right">Actions</Th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
-                    {items.map((t) => (
-                      <ChargeTemplateRow
-                        key={t.id}
-                        template={t}
-                        isEditing={editingId === t.id}
-                        loading={editMut.isPending || delMut.isPending}
-                        onEdit={() => setEditingId(editingId === t.id ? null : t.id)}
-                        onToggle={async () => {
-                          try {
-                            await editMut.mutateAsync({ id: t.id, body: { is_active: !t.is_active } })
-                            toast.success(`${t.name} ${t.is_active ? 'deactivated' : 'activated'}`)
-                          } catch (err) {
-                            toast.error(err.message || 'Could not update template')
-                          }
-                        }}
-                        onSave={async (price) => {
-                          try {
-                            await editMut.mutateAsync({ id: t.id, body: { price: Number(price) } })
-                            toast.success(`${t.name} amount updated`)
-                            setEditingId(null)
-                          } catch (err) {
-                            toast.error(err.message || 'Could not update amount')
-                          }
-                        }}
-                        onDelete={async () => {
-                          if (!confirm(`Delete "${t.name}"? This cannot be undone.`)) return
-                          try {
-                            await delMut.mutateAsync(t.id)
-                            toast.success('Template deleted')
-                          } catch (err) {
-                            toast.error(err.message || 'Could not delete template')
-                          }
-                        }}
-                      />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {showAdd && (
-        <AddTemplateModal
-          loading={addMut.isPending}
-          onClose={() => setShowAdd(false)}
-          onSubmit={async (body) => {
-            try {
-              await addMut.mutateAsync(body)
-              toast.success('Template added')
-              setShowAdd(false)
-            } catch (err) {
-              toast.error(err.message || 'Could not add template')
-            }
-          }}
+      {/* ── Clinic Fees ── */}
+      <Card className="overflow-hidden">
+        <CardHeader
+          title="Clinic Fees"
+          subtitle="Consultation, procedures, and fixed service prices"
+          action={
+            <button
+              onClick={() => setAdding(true)}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center gap-1.5"
+            >
+              <Icon name="plus" size={13} /> Add Service
+            </button>
+          }
         />
-      )}
+
+        {q.isLoading ? (
+          <SkeletonTable rows={4} cols={5} />
+        ) : q.isError ? (
+          <ErrorState message={q.error?.message || 'Could not load fees'} onRetry={q.refetch} />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400">Service</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400">Category</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-widest text-gray-400">Price</th>
+                  <th className="px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-widest text-gray-400">Active</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-widest text-gray-400" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
+                {templates.map((t) => (
+                  <tr key={t.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
+                    <td className="px-4 py-3 text-[13px] font-medium text-gray-900 dark:text-gray-100">{t.name}</td>
+                    <td className="px-4 py-3">
+                      <Badge className={CATEGORY_BADGES[t.category] || CATEGORY_BADGES.other}>
+                        {cap(t.category)}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <InlinePrice
+                        value={t.amount}
+                        isPending={updateMut.isPending}
+                        onSave={(amount) => updateMut.mutate({ id: t.id, body: { amount } })}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <TableToggle
+                        checked={t.is_active}
+                        onChange={(is_active) => updateMut.mutate({ id: t.id, body: { is_active } })}
+                        disabled={updateMut.isPending}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => {
+                          if (confirm(`Delete "${t.name}"?`)) delMut.mutate(t.id)
+                        }}
+                        className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-md"
+                        title="Delete"
+                      >
+                        <Icon name="trash" size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+
+                {adding && (
+                  <InlineAddRow
+                    onSave={(body) => addMut.mutate(body)}
+                    onCancel={() => setAdding(false)}
+                    loading={addMut.isPending}
+                  />
+                )}
+              </tbody>
+            </table>
+
+            {templates.length === 0 && !adding && (
+              <div className="px-4 py-8">
+                <EmptyState icon="receipt" title="No clinic fees" description="Add consultation and procedure fees." />
+              </div>
+            )}
+          </div>
+        )}
+      </Card>
+
+      {/* ── Lab Test Prices ── */}
+      <Card className="overflow-hidden">
+        <CardHeader title="Lab Test Prices" subtitle="Edit what patients are charged per test" />
+
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700/60 flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search tests..."
+              className="pl-8 pr-3 py-1.5 text-[12px] rounded-md border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-700 dark:text-gray-200 w-48"
+            />
+          </div>
+          <select
+            value={labCategory}
+            onChange={(e) => setLabCategory(e.target.value)}
+            className="px-2.5 py-1.5 text-[12px] rounded-md border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-700 dark:text-gray-200"
+          >
+            <option value="all">All categories</option>
+            {categories.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
+          <p className="text-[11px] text-gray-400 ml-auto">
+            {filteredTests.length} test{filteredTests.length === 1 ? '' : 's'}
+          </p>
+        </div>
+
+        {labQ.isLoading ? (
+          <SkeletonTable rows={6} cols={4} />
+        ) : labQ.isError ? (
+          <ErrorState message={labQ.error?.message || 'Could not load lab catalog'} onRetry={labQ.refetch} />
+        ) : filteredTests.length === 0 ? (
+          <EmptyState icon="flask" title="No tests found" description="Try adjusting your search." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/50">
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400">Test Name</th>
+                  <th className="px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-widest text-gray-400 hidden md:table-cell">Category</th>
+                  <th className="px-4 py-3 text-right text-[11px] font-semibold uppercase tracking-widest text-gray-400">Price</th>
+                  <th className="px-4 py-3 text-center text-[11px] font-semibold uppercase tracking-widest text-gray-400">Active</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
+                {filteredTests.map((t) => (
+                  <tr key={t.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
+                    <td className="px-4 py-3">
+                      <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{t.name}</p>
+                      {t.reference_range && (
+                        <p className="text-[10px] text-gray-400">{t.reference_range}</p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400">
+                        {t.category || '—'}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <InlinePrice
+                        value={t.unit_cost}
+                        isPending={labUpdateMut.isPending}
+                        onSave={(unit_cost) => labUpdateMut.mutate({ id: t.id, body: { unit_cost } })}
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <TableToggle
+                        checked={t.is_active}
+                        onChange={(is_active) => labUpdateMut.mutate({ id: t.id, body: { is_active } })}
+                        disabled={labUpdateMut.isPending}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
   )
 }
@@ -648,33 +913,7 @@ const CATEGORY_BADGES = {
   supplies: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   other: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
 }
-function ModalShell({ title, subtitle, onClose, children, footer, maxWidth = 'max-w-md' }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/50" />
-      <div
-        className={`relative w-full ${maxWidth} rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl max-h-[90vh] flex flex-col`}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 flex items-center justify-between shrink-0">
-          <div>
-            <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{title}</h3>
-            {subtitle && <p className="text-[11px] text-gray-400 mt-0.5">{subtitle}</p>}
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300" aria-label="Close">
-            <Icon name="x" size={16} />
-          </button>
-        </div>
-        <div className="p-5 overflow-y-auto">{children}</div>
-        {footer && (
-          <div className="px-5 py-3 border-t border-gray-200 dark:border-gray-700/60 flex items-center justify-end gap-2 shrink-0">
-            {footer}
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
+
 function StatTile({ label, value, icon, color = 'blue', sublabel }) {
   const colors = {
     blue: { card: 'bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-900/50', val: 'text-blue-700 dark:text-blue-400', ic: 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400' },
@@ -698,205 +937,6 @@ function StatTile({ label, value, icon, color = 'blue', sublabel }) {
       <p className={`text-2xl font-bold tabular-nums ${c.val} truncate`}>{value}</p>
       {sublabel && <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">{sublabel}</p>}
     </div>
-  )
-}
-function RowAction({ icon, label, onClick, color = 'gray', disabled }) {
-  const colors = {
-    gray: 'text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40 hover:text-gray-700 dark:hover:text-gray-200',
-    blue: 'text-[#1a6cbf] dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/30',
-    amber: 'text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30',
-    red: 'text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 hover:text-red-600',
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      title={label}
-      aria-label={label}
-      className={`w-7 h-7 inline-flex items-center justify-center rounded-md transition-colors disabled:opacity-40 ${colors[color]}`}
-    >
-      <Icon name={icon} size={13} />
-    </button>
-  )
-}
-function Th({ children, align = 'left', className = '' }) {
-  return (
-    <th
-      className={[
-        'px-4 py-3 text-[11px] font-semibold uppercase tracking-widest text-gray-400 whitespace-nowrap',
-        align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left',
-        className,
-      ].join(' ')}
-    >
-      {children}
-    </th>
-  )
-}
-
-function ChargeTemplateRow({ template, isEditing, loading, onEdit, onToggle, onSave, onDelete }) {
-  const [price, setPrice] = useState(String(template.price || 0))
-
-  // Re-sync the local price input when the parent template price changes
-  // (e.g. after a successful save round-trip or external mutation).
-  useEffect(() => {
-    if (!isEditing) setPrice(String(template.price || 0))
-  }, [template.price, isEditing])
-
-  return (
-    <tr className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
-      <td className="px-4 py-3">
-        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{template.name}</p>
-        <p className="text-[10px] text-gray-400 uppercase tracking-wider sm:hidden">{cap(template.category)}</p>
-      </td>
-      <td className="px-4 py-3 hidden sm:table-cell">
-        <Badge className={CATEGORY_BADGES[template.category] || CATEGORY_BADGES.other}>{cap(template.category)}</Badge>
-      </td>
-      <td className="px-4 py-3 text-right">
-        {isEditing ? (
-          <div className="flex items-center justify-end gap-1.5">
-            <span className="text-[11px] text-gray-400">KSh</span>
-            <input
-              type="number"
-              min="0"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              className="w-24 px-2 py-1 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 tabular-nums"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') onSave(price)
-                if (e.key === 'Escape') onEdit()
-              }}
-            />
-          </div>
-        ) : (
-          <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(template.price)}</span>
-        )}
-      </td>
-      <td className="px-4 py-3 text-center">
-        <button
-          onClick={onToggle}
-          disabled={loading}
-          title={template.is_active ? 'Active — click to deactivate' : 'Inactive — click to activate'}
-          className={[
-            'relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50',
-            template.is_active ? 'bg-emerald-500' : 'bg-gray-300 dark:bg-gray-600',
-          ].join(' ')}
-        >
-          <span
-            className={[
-              'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform',
-              template.is_active ? 'translate-x-5' : 'translate-x-1',
-            ].join(' ')}
-          />
-        </button>
-      </td>
-      <td className="px-4 py-3">
-        <div className="flex items-center justify-end gap-1">
-          {isEditing ? (
-            <>
-              <RowAction icon="check" label="Save" color="blue" onClick={() => onSave(price)} disabled={loading} />
-              <RowAction icon="x" label="Cancel" onClick={onEdit} disabled={loading} />
-            </>
-          ) : (
-            <>
-              <RowAction icon="edit" label="Edit amount" color="amber" onClick={onEdit} disabled={loading} />
-              <RowAction icon="trash" label="Delete" color="red" onClick={onDelete} disabled={loading} />
-            </>
-          )}
-        </div>
-      </td>
-    </tr>
-  )
-}
-
-function AddTemplateModal({ loading, onClose, onSubmit }) {
-  const [name, setName] = useState('')
-  const [category, setCategory] = useState('procedure')
-  const [price, setPrice] = useState('')
-  const [isActive, setIsActive] = useState(true)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!name.trim()) {
-      toast.error('Name is required')
-      return
-    }
-    const numPrice = Number(price)
-    if (!Number.isFinite(numPrice) || numPrice < 0) {
-      toast.error('Amount must be a non-negative number')
-      return
-    }
-    await onSubmit({ name: name.trim(), category, price: numPrice, is_active: isActive })
-  }
-
-  return (
-    <ModalShell
-      title="Add Charge Template"
-      subtitle="Create a new chargeable service line"
-      onClose={onClose}
-      footer={
-        <>
-          <button type="button" onClick={onClose} disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">
-            Cancel
-          </button>
-          <button type="submit" form="add-template-form" disabled={loading}
-            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50">
-            {loading ? <Spinner size={14} /> : <Icon name="save" size={14} />}
-            {loading ? 'Saving…' : 'Add Template'}
-          </button>
-        </>
-      }
-    >
-      <form id="add-template-form" onSubmit={handleSubmit} className="space-y-4">
-        <Field label="Name *">
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="e.g. ECG, Ultrasound, Depo-Provera Injection"
-            className={inputCls}
-            autoFocus
-          />
-        </Field>
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Category *">
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value)}
-              className={inputCls}
-            >
-              {TEMPLATE_CATEGORIES.map((c) => (
-                <option key={c.key} value={c.key}>{c.label}</option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Amount (KSh) *">
-            <input
-              type="number"
-              min="0"
-              step="any"
-              value={price}
-              onChange={(e) => setPrice(e.target.value)}
-              placeholder="0"
-              className={`${inputCls} tabular-nums`}
-            />
-          </Field>
-        </div>
-        <Field label="Status">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isActive}
-              onChange={(e) => setIsActive(e.target.checked)}
-              className="w-4 h-4 rounded border-gray-300 text-[#1a6cbf] focus:ring-[#1a6cbf]/40"
-            />
-            <span className="text-[13px] text-gray-700 dark:text-gray-300">Active (available for billing)</span>
-          </label>
-        </Field>
-      </form>
-    </ModalShell>
   )
 }
 

@@ -83,7 +83,7 @@ export default function BillingTab() {
 
   const totalCollected = completed.reduce((s, b) => s + b.paid_amount, 0)
   const totalReady = readyForBilling.reduce((s, b) => s + ((b.payable_amount ?? b.total_amount) - b.paid_amount), 0)
-  const totalPending = inProcess.reduce((s, b) => s + ((b.payable_amount ?? b.total_amount) - b.paid_amount), 0)
+const totalPending = inProcess.reduce((s, b) => s + ((b.payable_amount ?? b.total_amount) - b.paid_amount), 0)
 
   return (
     <div className="space-y-4">
@@ -134,7 +134,7 @@ export default function BillingTab() {
                         <p className="text-[10px] text-gray-400">Arrived {formatTime(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items.map((i) => i.name).join(', ')}</span>
+                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items?.map((i) => i.name).join(', ')}</span>
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatMoney((b.payable_amount ?? b.total_amount) - b.paid_amount)}</td>
@@ -192,7 +192,7 @@ export default function BillingTab() {
                         <p className="text-[10px] text-gray-400">Arrived {formatTime(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items.map((i) => i.name).join(', ')}</span>
+                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items?.map((i) => i.name).join(', ')}</span>
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{formatMoney((b.payable_amount ?? b.total_amount) - b.paid_amount)}</td>
@@ -244,7 +244,7 @@ export default function BillingTab() {
                         <p className="text-[10px] text-gray-400">{formatTime(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items.map((i) => i.name).join(', ')}</span>
+                        <span className="text-[12px] text-gray-600 dark:text-gray-300">{b.items?.map((i) => i.name).join(', ')}</span>
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.total_amount)}</td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatMoney(b.paid_amount)}</td>
