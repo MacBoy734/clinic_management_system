@@ -9,12 +9,13 @@ import {
   badgeClass, cap, formatTime, formatMoney, waitMinutes, VISIT_TYPES, PAYMENT_METHODS,
 } from '@/utils/helpers'
 import { PaymentModal } from '@/components/reception/paymentModal'
+import { registerVisitSchema } from '@/lib/validation'
 
 const STATUS_FILTERS = ['all', 'waiting', 'consultation_paid', 'with_doctor', 'lab', 'pharmacy', 'billing', 'done']
 
 // ─── Register modal ───────────────────────────────────────────────────────────
 const EMPTY_PATIENT = {
-  name: '', gender: 'male', phone: '', national_id: '', age: '',
+  name: '', gender: 'male', phone: '', national_id: '', age: '', age_unit: 'years',
 }
 
 const inputCls = 'w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]'
@@ -189,27 +190,32 @@ function RegisterModal({ onClose }) {
 
   const handleSubmit = (e) => {
     e.preventDefault()
-    if (!patient.name.trim()) return toast.error('Full name is required')
-    if (!patient.gender) return toast.error('Gender is required')
-    if (visitType === 'direct_lab' && selectedTests.length === 0) {
-      return toast.error('Select at least one lab test')
-    }
 
-    registerMut.mutate({
+    const payload = {
       patient: {
-        name: patient.name.trim(),
+        name: patient.name,
         gender: patient.gender,
+        age: patient.age,
+        age_unit: patient.age_unit,
         phone: patient.phone || null,
         national_id: patient.national_id || null,
-        blood_group: patient.blood_group || null,
-        allergies: patient.allergies || null,
-        age: patient.age ? Number(patient.age) : null,
       },
       visit_type: visitType,
       referred_by: visitType === 'direct_lab' ? (referredBy || null) : null,
       referrer_phone: visitType === 'direct_lab' ? (referrerPhone || null) : null,
-      lab_test_ids: visitType === 'direct_lab' ? selectedTests.map((t) => t.id) : undefined,
-    })
+      lab_test_ids: visitType === 'direct_lab' ? selectedTests.map((t) => t.id) : [],
+    }
+
+    const result = registerVisitSchema.safeParse(payload)
+    if (!result.success) {
+      const message = result.error.issues
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
+        .join('; ')
+      return toast.error(message)
+    }
+
+    // Validated & coerced payload
+    registerMut.mutate(result.data)
   }
 
   const saving = registerMut.isPending
@@ -289,13 +295,35 @@ function RegisterModal({ onClose }) {
                 </select>
               </Field>
               <Field label="Age *">
-                <input type="number" value={patient.age}
-                  onChange={(e) => setPatient({ ...patient, age: e.target.value })}
-                  placeholder="e.g. 30" className={inputCls} required min={1} max={110} />
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    value={patient.age}
+                    min={1}
+                    onChange={(e) => setPatient({ ...patient, age: e.target.value })}
+                    placeholder="e.g. 3"
+                    className={`${inputCls}`}
+                    required
+                  />
+                  <select
+                    value={patient.age_unit}
+                    onChange={(e) => setPatient({ ...patient, age_unit: e.target.value })}
+                    className={`${inputCls} w-12`}
+                  >
+                    <option value="years">Years</option>
+                    <option value="months">Months</option>
+                    <option value="weeks">Weeks</option>
+                    <option value="days">Days</option>
+                  </select>
+                </div>
               </Field>
               <Field label="Phone">
                 <input type="tel" value={patient.phone}
-                  onChange={(e) => setPatient({ ...patient, phone: e.target.value })}
+                  onChange={(e) => {
+                    const digitsOnly = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setPatient({ ...patient, phone: digitsOnly });
+                  }}
+                  maxLength={10}
                   placeholder="07XX XXX XXX" className={inputCls} />
               </Field>
               <Field label="National ID">

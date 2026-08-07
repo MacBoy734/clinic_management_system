@@ -1,25 +1,5 @@
 'use client'
 
-// ConsultationTab — the doctor's consultation room (merged page)
-// APIs:
-//   GET   /api/doctor/visits/[id]                        → { locked, visit }
-//   PATCH /api/doctor/visits/[id]                        → vitals, soap, diagnosis, status, from_pharmacy
-//   GET   /api/doctor/lab-catalog                        → active lab tests for the order modal
-//   GET   /api/doctor/visits/[id]/labs                   → lab orders (items carry result_data + result_template)
-//   POST  /api/doctor/visits/[id]/labs                   → { test_ids:[id], urgency }
-//   GET   /api/doctor/visits/[id]/prescriptions          → prescriptions for visit
-//   POST  /api/doctor/visits/[id]/prescriptions          → { items:[{medication,dosage,frequency,duration,quantity,unit_cost,form,drug_id}] }
-//   PATCH /api/doctor/prescriptions/[id]/return-item     → { item_id, doctor_name, reason } (issued items only)
-//   GET   /api/procedures                                → { procedures, familyPlanningMethods }
-//   PATCH /api/doctor/visits/[id]/complete-procedure     → { procedure_type, procedure_id, notes, doctor_name, price }
-//   GET   /api/pharmacy/drugs                            → drug stock for the prescription search
-//
-// CONTROLLED-INPUT POLICY: every controlled input's `value` must stay defined
-// for the life of the component. Any value sourced from an API response gets a
-// `?? ''` / `?? 0` guard either at the write site or on the prop — one missing
-// field in a payload must never flip an input to uncontrolled (React warning:
-// "A component is changing a controlled input to be uncontrolled").
-
 import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -38,6 +18,13 @@ import {
 import socket from '@/lib/socket'
 import { DIAGNOSIS_CATALOG, DIAGNOSIS_CATEGORIES } from '@/lib/diagnosis_catalog'
 import { MedicalReportModal } from '@/components/doctor/MedicalReportModal'
+import {
+  patchVisitSchema,
+  orderLabTestsSchema,
+  createPrescriptionSchema,
+  completeProcedureSchema,
+  returnItemSchema,
+} from '@/lib/validation'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -163,32 +150,32 @@ export default function ConsultationTab() {
   }, [visit?.id, locked])
 
   // ── Websockets ──────────────────────────────────────────────────────────────
-useEffect(() => {
-  if (!visitId) return
+  useEffect(() => {
+    if (!visitId) return
 
-  const handleDispensed = () => {
-    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
-    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
-  }
+    const handleDispensed = () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
+    }
 
-  const handleCancelled = () => {
-    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
-    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
-  }
-  const handleLabrequests = () => {
-    queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
-  }
+    const handleCancelled = () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId, 'prescriptions'] })
+    }
+    const handleLabrequests = () => {
+      queryClient.invalidateQueries({ queryKey: ['doctor', 'visit', visitId] })
+    }
 
-  socket.on('rx:dispensed', handleDispensed)
-  socket.on('rx:cancelled', handleCancelled)
-  socket.on('lab:results_ready', handleLabrequests)
+    socket.on('rx:dispensed', handleDispensed)
+    socket.on('rx:cancelled', handleCancelled)
+    socket.on('lab:results_ready', handleLabrequests)
 
-  return () => {
-    socket.off('rx:dispensed', handleDispensed)
-    socket.off('rx:cancelled', handleCancelled)
-    socket.off('lab:results_ready', handleLabrequests)
-  }
-}, [visitId, queryClient])
+    return () => {
+      socket.off('rx:dispensed', handleDispensed)
+      socket.off('rx:cancelled', handleCancelled)
+      socket.off('lab:results_ready', handleLabrequests)
+    }
+  }, [visitId, queryClient])
 
   // API: PATCH /api/doctor/visits/[id]
   const patchMutation = useMutation({
@@ -225,8 +212,26 @@ useEffect(() => {
   // ─── Save handlers ──────────────────────────────────────────────────────────
 
   const handleSaveVitals = async () => {
+    const payload = {
+      temperature: vitals.temperature === '' ? null : Number(vitals.temperature),
+      bp_systolic: vitals.bp_systolic === '' ? null : Number(vitals.bp_systolic),
+      bp_diastolic: vitals.bp_diastolic === '' ? null : Number(vitals.bp_diastolic),
+      pulse: vitals.pulse === '' ? null : Number(vitals.pulse),
+      respiratory_rate: vitals.respiratory_rate === '' ? null : Number(vitals.respiratory_rate),
+      weight: vitals.weight === '' ? null : Number(vitals.weight),
+      height: vitals.height === '' ? null : Number(vitals.height),
+      spo2: vitals.spo2 === '' ? null : Number(vitals.spo2),
+      vitals_notes: vitals.vitals_notes?.trim() || null,
+    }
+
+    const parsed = patchVisitSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await patchMutation.mutateAsync({ ...vitals })
+      await patchMutation.mutateAsync(parsed.data)
       toast.success('Vitals saved')
     } catch (err) {
       toast.error(err.message || 'Could not save vitals')
@@ -234,8 +239,21 @@ useEffect(() => {
   }
 
   const handleSaveSoap = async () => {
+    const payload = {
+      subjective: soap.subjective?.trim() || null,
+      objective: soap.objective?.trim() || null,
+      assessment: soap.assessment?.trim() || null,
+      plan: soap.plan?.trim() || null,
+    }
+
+    const parsed = patchVisitSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await patchMutation.mutateAsync({ ...soap })
+      await patchMutation.mutateAsync(parsed.data)
       toast.success('SOAP notes saved')
     } catch (err) {
       toast.error(err.message || 'Could not save notes')
@@ -247,8 +265,20 @@ useEffect(() => {
       toast.error('Diagnosis cannot be saved until all lab results are ready. Please wait for the lab to complete the tests.')
       return
     }
+
+    const payload = {
+      diagnosis: diagnosis?.trim() || null,
+      diagnosis_code: diagnosisCode?.trim() || null,
+    }
+
+    const parsed = patchVisitSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await patchMutation.mutateAsync({ diagnosis, diagnosis_code: diagnosisCode })
+      await patchMutation.mutateAsync(parsed.data)
       toast.success('Diagnosis saved')
     } catch (err) {
       toast.error(err.message || 'Could not save diagnosis')
@@ -263,8 +293,26 @@ useEffect(() => {
       toast.error(endBlockReason)
       return
     }
+
+    const payload = {
+      status: 'billing',
+      from_pharmacy: false,
+      diagnosis: diagnosis?.trim() || null,
+      diagnosis_code: diagnosisCode?.trim() || null,
+      subjective: soap.subjective?.trim() || null,
+      objective: soap.objective?.trim() || null,
+      assessment: soap.assessment?.trim() || null,
+      plan: soap.plan?.trim() || null,
+    }
+
+    const parsed = patchVisitSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await patchMutation.mutateAsync({ status: 'billing', from_pharmacy: false, diagnosis, diagnosis_code: diagnosisCode, ...soap })
+      await patchMutation.mutateAsync(parsed.data)
       toast.success('Consultation completed — patient sent to billing')
     } catch (err) {
       toast.error(err.message || 'Could not end consultation')
@@ -272,14 +320,22 @@ useEffect(() => {
   }
 
   const handleAddProcedure = async (procedureType, procedureId, notes, price) => {
+    const payload = {
+      procedure_id: Number(procedureId),
+      procedure_type: procedureType,
+      notes: notes?.trim() || null,
+      doctor_name: user?.username || 'Doctor',
+      price: Math.round(Number(price) || 0),
+    }
+
+    const parsed = completeProcedureSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      const result = await procedureMutation.mutateAsync({
-        procedure_type: procedureType,
-        procedure_id: procedureId,
-        notes,
-        doctor_name: user?.username || 'Doctor',
-        price,
-      })
+      const result = await procedureMutation.mutateAsync(parsed.data)
       toast.success(result.message || 'Procedure added to bill')
       setShowProcedureModal(false)
     } catch (err) {
@@ -292,8 +348,16 @@ useEffect(() => {
       toast.error('Select at least one test')
       return
     }
+
+    const payload = { test_ids: testIds, urgency }
+    const parsed = orderLabTestsSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await labMutation.mutateAsync({ test_ids: testIds, urgency })
+      await labMutation.mutateAsync(parsed.data)
       toast.success(`${testIds.length} lab test${testIds.length > 1 ? 's' : ''} ordered`)
       setShowLabModal(false)
     } catch (err) {
@@ -301,13 +365,33 @@ useEffect(() => {
     }
   }
 
-  const handleAddPrescription = async (items) => {
-    if (!items.length) {
+  const handleAddPrescription = async (rawItems) => {
+    if (!rawItems.length) {
       toast.error('Add at least one medication')
       return
     }
+
+    const sanitizedItems = rawItems.map((it) => ({
+      medication: it.medication?.trim(),
+      product_id: it.product_id ? Number(it.product_id) : undefined,
+      drug_id: it.drug_id ? Number(it.drug_id) : undefined,
+      dosage: it.dosage?.trim() || '',
+      frequency: it.frequency?.trim() || '',
+      duration: it.duration?.trim() || '',
+      quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
+      unit_cost: Math.max(0, Math.round(Number(it.unit_cost) || 0)),
+      form: it.form || 'oral',
+    }))
+
+    const payload = { items: sanitizedItems }
+    const parsed = createPrescriptionSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     try {
-      await rxMutation.mutateAsync({ items })
+      await rxMutation.mutateAsync(parsed.data)
       toast.success('Prescription sent to pharmacy')
       setShowRxModal(false)
     } catch (err) {
@@ -518,7 +602,7 @@ useEffect(() => {
             <LabOrdersList loading={labsQuery.isLoading} requests={labRequests} patient={patientForEval} />
           </Card>
 
-           {/* Diagnosis */}
+          {/* Diagnosis */}
           <Card className="p-4">
             <div className="flex items-center justify-between mb-3">
               <div>
@@ -585,9 +669,9 @@ useEffect(() => {
           <Card className="overflow-hidden">
             <CardHeader
               title="Prescriptions"
-              subtitle={ pendingRxCount > 0
-                    ? `${pendingRxCount} pending item${pendingRxCount > 1 ? 's' : ''}`
-                    : 'No prescriptions yet'
+              subtitle={pendingRxCount > 0
+                ? `${pendingRxCount} pending item${pendingRxCount > 1 ? 's' : ''}`
+                : 'No prescriptions yet'
               }
               action={
                 <button
@@ -868,8 +952,8 @@ function SoapSection({ letter, label, hint, open, onToggle, value, onChange, pla
   // Empty query on focus shows the first few for discovery; typing filters.
   const filtered = suggestions
     ? (q
-        ? suggestions.filter((s) => s.toLowerCase().includes(q)).slice(0, 12)
-        : suggestions.slice(0, 10))
+      ? suggestions.filter((s) => s.toLowerCase().includes(q)).slice(0, 12)
+      : suggestions.slice(0, 10))
     : []
 
   const addSuggestion = (text) => {
@@ -969,8 +1053,8 @@ function DiagnosisSearchSelect({ code, text, disabled, onSelect }) {
   const q = search.trim().toLowerCase()
   const filtered = q
     ? DIAGNOSIS_CATALOG.filter((d) =>
-        d.label.toLowerCase().includes(q) || d.code.toLowerCase().includes(q)
-      ).slice(0, 15)
+      d.label.toLowerCase().includes(q) || d.code.toLowerCase().includes(q)
+    ).slice(0, 15)
     : []
 
   const pick = (c, label) => {
@@ -1128,15 +1212,15 @@ function VitalsField({ label, icon, value, onChange, placeholder, status, abnorm
 
 // Flag colour per evaluation status (matches the printed report)
 const FLAG_TEXT = {
-  low:      'font-bold text-amber-600 dark:text-amber-400',
-  high:     'font-bold text-red-600 dark:text-red-400',
+  low: 'font-bold text-amber-600 dark:text-amber-400',
+  high: 'font-bold text-red-600 dark:text-red-400',
   abnormal: 'font-bold text-red-600 dark:text-red-400',
 }
 
 const ITEM_STATUS_BADGE = {
-  pending:     'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
+  pending: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
   in_progress: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  ready:       'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  ready: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
 }
 
 function LabOrdersList({ loading, requests, patient }) {
@@ -1377,12 +1461,12 @@ const RETURN_REASON_SUGGESTIONS = [
 ]
 
 const ITEM_STATUS_BADGES = {
-  pending:   { label: 'Pending',      cls: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400' },
-  issued:    { label: 'Issued',       cls: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
-  returned:  { label: 'Returned — awaiting pharmacy confirmation', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
-  restocked: { label: 'Restocked',    cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
-  declined:  { label: 'Declined',     cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
-  cancelled: { label: 'Cancelled',    cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+  pending: { label: 'Pending', cls: 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400' },
+  issued: { label: 'Issued', cls: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  returned: { label: 'Returned — awaiting pharmacy confirmation', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+  restocked: { label: 'Restocked', cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+  declined: { label: 'Declined', cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
+  cancelled: { label: 'Cancelled', cls: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' },
 }
 
 function PrescriptionsList({ loading, prescriptions, visitId }) {
@@ -1423,11 +1507,24 @@ function PrescriptionsList({ loading, prescriptions, visitId }) {
 
   const confirmReturn = () => {
     if (!returnTarget || !returnReason.trim()) return
+
+    const payload = {
+      item_id: returnTarget.item.id,
+      doctor_name: user?.username || 'Doctor',
+      reason: returnReason.trim(),
+    }
+
+    const parsed = returnItemSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
+
     returnItemMutation.mutate({
       prescriptionId: returnTarget.prescription.id,
-      itemId: returnTarget.item.id,
-      doctorName: user?.username || 'Doctor',
-      reason: returnReason.trim(),
+      itemId: parsed.data.item_id,
+      doctorName: parsed.data.doctor_name,
+      reason: parsed.data.reason,
       medicationName: returnTarget.item.medication,
     })
   }
@@ -1844,6 +1941,26 @@ function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
     }))
   }
 
+  // Replace the existing footer button onClick in PrescriptionModal
+  const handleModalSubmit = () => {
+    const payloadItems = items
+      .filter((it) => it.medication.trim() && !it._allergy_hit)
+      .map(({ _stock, _reorder_level, _pharmacy_normal_price, _unit, _allergy_hit, ...rest }) => ({
+        medication: rest.medication?.trim(),
+        product_id: rest.product_id ? Number(rest.product_id) : undefined,
+        drug_id: rest.drug_id ? Number(rest.drug_id) : undefined,
+        dosage: rest.dosage?.trim() || '',
+        frequency: rest.frequency?.trim() || '',
+        duration: rest.duration?.trim() || '',
+        quantity: Math.max(1, Math.round(Number(rest.quantity) || 1)),
+        unit_cost: Math.max(0, Math.round(Number(rest.unit_cost) || 0)),
+        form: rest.form || 'oral',
+      }))
+
+    onSubmit(payloadItems)
+  }
+
+
   const addItem = () => setItems((arr) => [...arr, { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '' }])
   const removeItem = (i) => setItems((arr) => arr.filter((_, idx) => idx !== i))
 
@@ -1866,7 +1983,7 @@ function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
         <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(totalCost)}</span>
       </div>
       <button
-        onClick={() => onSubmit(validItems)}
+        onClick={handleModalSubmit}
         disabled={loading || validItems.length === 0 || hasAllergyConflict}
         title={hasAllergyConflict ? 'Remove the allergy-conflicting medication to proceed' : undefined}
         className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -2095,9 +2212,9 @@ function DrugSearchInput({ value, drugs, onChange, onSelect, formFilter }) {
   const query = (value || '').trim().toLowerCase()
   const filtered = query
     ? formFiltered.filter((d) =>
-        (d.name || '').toLowerCase().includes(query) ||
-        (d.generic_name || '').toLowerCase().includes(query)
-      ).slice(0, 8)
+      (d.name || '').toLowerCase().includes(query) ||
+      (d.generic_name || '').toLowerCase().includes(query)
+    ).slice(0, 8)
     : formFiltered.slice(0, 8)
 
   const placeholder = formFilter === 'injection'

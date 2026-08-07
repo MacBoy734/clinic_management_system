@@ -2,6 +2,8 @@
 
 import { useState, useMemo, useEffect } from 'react'
 import { Icon, formatMoney } from '@/utils/helpers'
+import toast from 'react-hot-toast'
+import { paymentModalSchema } from '@/lib/validation'
 
 const METHODS = [
   { value: 'cash', label: 'Cash', icon: 'dollarSign' },
@@ -87,7 +89,8 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
 
   const handleSubmit = () => {
     if (!canSubmit) return
-    onConfirm({
+
+    const payload = {
       payments: lines
         .filter((l) => (parseInt(l.amount) || 0) > 0)
         .map((l) => ({
@@ -97,12 +100,27 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
         })),
       discount_amount: discountNum,
       discount_reason: discountNum > 0 ? discountReason.trim() : null,
-    })
+    }
+
+    const result = paymentModalSchema.safeParse(payload)
+    if (!result.success) {
+      const message = result.error.issues
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
+        .join('; ')
+      toast.error(message)
+      return
+    }
+
+    onConfirm(result.data)
   }
 
   const handleWaiveSubmit = () => {
-    if (!waiveReason.trim()) return
-    onWaive({ reason: waiveReason.trim() })
+    const reason = waiveReason.trim()
+    if (!reason) {
+      toast.error('Reason is required to waive the fee')
+      return
+    }
+    onWaive({ reason })
   }
 
   return (
@@ -403,7 +421,7 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
                 title={
                   remaining !== 0 ? 'Payments must settle the balance exactly'
                     : discountNeedsReason ? 'Enter a reason for the discount'
-                    : undefined
+                      : undefined
                 }
                 className="px-4 py-2 rounded-lg text-[13px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >

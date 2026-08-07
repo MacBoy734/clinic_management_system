@@ -3,6 +3,8 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
+import { expenseFormSchema } from '@/lib/validation'
+import toast from 'react-hot-toast'
 
 const DOMAIN = 'clinic'
 
@@ -188,14 +190,24 @@ export default function ReceptionExpensesPage() {
   const stats = statsQuery.data ?? { total_amount: 0, entry_count: 0, avg_amount: 0 }
   const totalPages = Math.ceil(total / 20) || 1
 
-  const handleSaveExpense = async (form) => {
+    const handleSaveExpense = async (form) => {
+    const payload = {
+      description: form.description,
+      amount: form.amount,
+      incurred_at: form.incurred_at || null,
+    }
+
+    const result = expenseFormSchema.safeParse(payload)
+    if (!result.success) {
+      const message = result.error.issues
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
+        .join('; ')
+      throw new Error(message) // caught by modal's catch block
+    }
+
     await saveMutation.mutateAsync({
       id: form.id ?? null,
-      data: {
-        description: form.description.trim(),
-        amount: Number(form.amount),
-        incurred_at: form.incurred_at || null,
-      },
+      data: result.data, // cleaned & coerced
     })
   }
 

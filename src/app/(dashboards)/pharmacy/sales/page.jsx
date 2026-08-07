@@ -10,6 +10,7 @@ import {
   PAYMENT_METHODS, Spinner,
 } from '@/utils/helpers'
 import { useAuthStore } from '@/store/authStore'
+import { createOtcSaleSchema } from '@/lib/validation'
 
 const PRICE_TIERS = [
   { key: 'normal', label: 'Normal', priceField: 'normal_price' },
@@ -467,43 +468,55 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   }
 
   function handleSubmit(e) {
-    e.preventDefault()
-    if (!cart.length) {
-      toast.error('Add at least one item to the sale')
-      return
-    }
-    if (disc > 0 && !discountReason.trim()) {
-      toast.error('A reason is required for every discount')
-      return
-    }
-    if (remaining !== 0) {
-      toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
-      return
-    }
-    if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
-      toast.error('Credit sales require a customer name and phone')
-      return
-    }
+  e.preventDefault()
 
-    onComplete({
-      customer_name: customerName.trim(),
-      customer_phone: hasCredit ? customerPhone.trim() : undefined,
-      discount_amount: disc,
-      discount_reason: disc > 0 ? discountReason.trim() : undefined,
-      payments: paymentLines.map((p) => ({
-        method: p.method,
-        amount: parseInt(p.amount) || 0,
-        reference: p.reference,
-      })),
-      items: cart.map((i) => ({
-        product_id: i.product_id,
-        name: i.name,
-        quantity: i.quantity,
-        unit_price: i.unit_price,
-        price_tier: i.price_tier,
-      })),
-    })
+  // ── Keep your existing manual UX guards ─────────────────────────────
+  if (!cart.length) {
+    toast.error('Add at least one item to the sale')
+    return
   }
+  if (disc > 0 && !discountReason.trim()) {
+    toast.error('A reason is required for every discount')
+    return
+  }
+  if (remaining !== 0) {
+    toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
+    return
+  }
+  if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
+    toast.error('Credit sales require a customer name and phone')
+    return
+  }
+
+  // ── Build a schema-safe payload ─────────────────────────────────────
+  const payload = {
+    customer_name: customerName.trim() || undefined,  // let Zod apply 'Walk-in Customer' default
+    customer_phone: hasCredit ? customerPhone.trim() : null,
+    discount_amount: disc,
+    discount_reason: disc > 0 ? discountReason.trim() : null,
+    payments: paymentLines.map((p) => ({
+      method: p.method,
+      amount: Math.max(0, Math.round(Number(p.amount) || 0)),  // Money = int ≥ 0
+      reference: p.reference?.trim() || null,
+    })),
+    items: cart.map((i) => ({
+      product_id: i.product_id,
+      name: i.name,
+      quantity: Math.max(1, Math.round(Number(i.quantity) || 1)),  // PositiveQuantity
+      unit_price: Math.max(0, Math.round(Number(i.unit_price) || 0)),  // Money
+      price_tier: i.price_tier,
+    })),
+  }
+
+  // ── Validate before the API ever sees it ────────────────────────────
+  const parsed = createOtcSaleSchema.safeParse(payload)
+  if (!parsed.success) {
+    toast.error(parsed.error.errors[0].message)
+    return
+  }
+
+  onComplete(parsed.data)
+}
 
   // ── RENDER ───────────────────────────────────────────────────────
   return (
