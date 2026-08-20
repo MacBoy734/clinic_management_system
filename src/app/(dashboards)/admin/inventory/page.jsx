@@ -298,6 +298,27 @@ function LabStockSubTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Lab Stock</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {items.length} item{items.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => q.refetch()}
+            disabled={q.isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={q.isFetching ? 'animate-spin' : ''} 
+            />
+            {q.isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatTile label="Total Items" value={items.length} icon="flask" color="blue" sublabel="lab reagents & supplies" />
         <StatTile label="Low Stock" value={lowStock.length} icon="alert" color="amber" sublabel="at/below reorder level" />
@@ -450,6 +471,7 @@ function ProductStockSubTab() {
   isLoading,
   isError,
   error,
+  isFetching,
   refetch,
 } = useInfiniteQuery({
   queryKey: ['admin', 'drug-stock', search.trim(), categoryFilter, expiryFilter],
@@ -516,8 +538,29 @@ function ProductStockSubTab() {
     return d !== null && d >= 0 && d <= 90
   })
 
-  return (
+    return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Product Stock</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {totalItems} item{totalItems !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatTile label="Total Items" value={totalItems} icon="box" color="blue" sublabel="all SKUs" />
         <StatTile label="Low Stock" value={lowStock.length} icon="alert" color="amber" sublabel="need reorder" />
@@ -1300,6 +1343,27 @@ function RestockVerificationSubTab() {
 
   return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Restock Verification</h3>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {all.length} request{all.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => q.refetch()}
+            disabled={q.isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={q.isFetching ? 'animate-spin' : ''} 
+            />
+            {q.isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatTile label="Pending" value={stats.pending ?? 0} icon="alert" color="amber" sublabel={formatMoney(stats.pending_value ?? 0)} />
         <StatTile label="Approved" value={stats.approved ?? 0} icon="checkCircle" color="green" sublabel="added to stock" />

@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import {
   StatCard, SkeletonCard, SkeletonList, ErrorState, EmptyState,
-  Card, Badge, Icon, badgeClass, cap, waitMinutes, formatTime, VISIT_TYPES,
+  Card, Badge, Icon, badgeClass, cap, waitMinutes, formatTime, VISIT_TYPES, timeAgoShort
 } from '@/utils/helpers'
 import { useAuthStore } from '@/store/authStore'
 import socket from '@/lib/socket'
@@ -33,14 +33,14 @@ export default function QueueTab({ onStartConsultation }) {
   const user = useAuthStore((s) => s.user)
 
   // API: GET /api/doctor/queue
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['doctor', 'queue'],
     queryFn: () => api.get('/api/doctor/queue'),
     refetchInterval: 20000,
     staleTime: 10000,
   })
 
-    useEffect(() => {
+  useEffect(() => {
     socket.on('visit:new', () => {
       queryClient.invalidateQueries({ queryKey: ['doctor', 'queue'] })
     })
@@ -127,28 +127,42 @@ export default function QueueTab({ onStartConsultation }) {
         <StatCard icon="pill" color="cyan" label="Sent to Pharmacy" value={counts.pharmacy} sublabel="for dispensing" />
       </div>
 
-      {/* Filter pills */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {STATUS_FILTERS.map((s) => {
-          const count = s.key === 'all' ? visits.length : (counts[s.key] || 0)
-          return (
-            <button key={s.key} onClick={() => setFilter(s.key)}
-              className={[
-                'px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors flex items-center gap-1.5',
-                filter === s.key
-                  ? 'bg-[#1a6cbf] text-white'
-                  : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700/60 hover:border-blue-300 dark:hover:border-blue-700',
-              ].join(' ')}>
-              {s.label}
-              <span className={[
-                'text-[10px] font-bold px-1.5 py-0.5 rounded-full',
-                filter === s.key ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700/40 text-gray-500 dark:text-gray-400',
-              ].join(' ')}>
-                {count}
-              </span>
-            </button>
-          )
-        })}
+      {/* Filter pills + refresh */}
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap">
+          {STATUS_FILTERS.map((s) => {
+            const count = s.key === 'all' ? visits.length : (counts[s.key] || 0)
+            return (
+              <button key={s.key} onClick={() => setFilter(s.key)}
+                className={[
+                  'px-3 py-1.5 rounded-full text-[13px] font-medium transition-colors flex items-center gap-1.5',
+                  filter === s.key
+                    ? 'bg-[#1a6cbf] text-white'
+                    : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700/60 hover:border-blue-300 dark:hover:border-blue-700',
+                ].join(' ')}>
+                {s.label}
+                <span className={[
+                  'text-[10px] font-bold px-1.5 py-0.5 rounded-full',
+                  filter === s.key ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700/40 text-gray-500 dark:text-gray-400',
+                ].join(' ')}>
+                  {count}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon
+            name="refresh"
+            size={13}
+            className={isFetching ? 'animate-spin' : ''}
+          />
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
       </div>
 
       {/* Queue list */}

@@ -9,7 +9,7 @@ import { StatCard, Card, SkeletonCard, ErrorState, Badge, Icon, formatMoney, bad
 
 export default function OverviewTab({ onNavigate }) {
   // API: GET /api/reception/overview
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['reception', 'overview'],
     queryFn: () => api.get('/api/reception/stats'),
     refetchInterval: 20000,
@@ -33,8 +33,25 @@ export default function OverviewTab({ onNavigate }) {
   console.log('data ', data)
   console.log('stats ', stats)
 
-  return (
+    return (
     <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-[16px] font-bold text-gray-900 dark:text-gray-100">Dashboard</h2>
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon 
+            name="refresh" 
+            size={13} 
+            className={isFetching ? 'animate-spin' : ''} 
+          />
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       {/* Stat cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon="users" color="blue" label="Patients Today" value={stats?.total_visits} sublabel="visits registered" />

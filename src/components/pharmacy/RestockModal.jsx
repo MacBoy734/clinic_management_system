@@ -1,40 +1,4 @@
 'use client'
-
-// RestockModal — raise a restock REQUEST for any catalogue item.
-//
-// Stock does NOT move here. This creates a RestockRequest row with status
-// 'pending'; Product.current_stock only increases when an admin verifies the
-// request and records how many units actually arrived.
-//
-// WHAT CHANGED
-//   • Batch number and expiry date are now OPTIONAL. They are unknowable at
-//     request time — a pharmacist ordering stock the supplier has not yet
-//     shipped had to invent both. They belong on the admin's verify form,
-//     when the goods physically land. Pass batchRequired / expiryRequired if
-//     your workflow genuinely knows them up front.
-//   • Works for every category, not just medications. Form / Strength /
-//     generic name only render for medications; a box of gloves has none.
-//   • The projection is valued at COST, matching the Stock tab. The previous
-//     version multiplied by unit_price (retail), so the same inventory
-//     showed two different values on two screens.
-//
-// Fields map onto the RestockRequest model:
-//   requested_qty  ← Quantity to request   (required)
-//   batch_number   ← Batch number          (optional)
-//   expiry_date    ← Expiry date           (optional)
-//   notes          ← Notes                 (optional)
-// department / product_id / received_qty / requested_by / status are set
-// server-side; the client never supplies them.
-//
-// Props:
-//   item           — product row
-//   pending        — existing pending RestockRequest for this item, or null
-//   loading        — bool, true while the POST is in-flight
-//   batchRequired  — bool, default false
-//   expiryRequired — bool, default false
-//   onClose        — fn
-//   onConfirm      — fn(item, { quantity, batchNumber, expiryDate, notes })
-
 import { useState, useEffect } from 'react'
 import { Icon, formatMoney, cap, Spinner, formatDate } from '@/utils/helpers'
 
@@ -63,9 +27,6 @@ export function RestockModal({
 }) {
   const suggestedQty = Math.max(1, (Number(item.reorder_level) || 0) * 2)
   const [quantity, setQuantity] = useState(suggestedQty)
-  // Blank, not the previous batch — a restock brings a NEW batch, and
-  // pre-filling the old one is how a fresh delivery inherits a stale expiry.
-  const [batchNumber, setBatchNumber] = useState('')
   const [expiryDate, setExpiryDate] = useState('')
   const [notes, setNotes] = useState('')
 
@@ -95,8 +56,6 @@ export function RestockModal({
   const expirySoon = expiryValid && !expiryPast &&
     (expiryTime - Date.now()) / 86400000 <= 90
 
-  const batchEntered = batchNumber.trim().length > 0
-
   // An entered value must still be sane, but a blank one is fine unless the
   // caller explicitly demands it.
   const batchOk = batchRequired ? batchEntered : true
@@ -111,7 +70,6 @@ export function RestockModal({
     if (!valid || loading) return
     onConfirm(item, {
       quantity: qty,
-      batchNumber: batchNumber.trim() || null,
       expiryDate: expiryDate || null,
       notes: notes.trim(),
     })
@@ -208,26 +166,6 @@ export function RestockModal({
                 2× reorder
               </button>
             </div>
-          </div>
-
-          {/* Batch number — optional unless the caller demands it */}
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 mb-1.5">
-              Batch number {batchRequired ? '*' : <span className="font-normal text-gray-400">(if known)</span>}
-            </label>
-            <input
-              type="text"
-              value={batchNumber}
-              onChange={(e) => setBatchNumber(e.target.value)}
-              placeholder={isMedication ? 'e.g. AMX2025-05' : 'e.g. GLV-0725'}
-              disabled={!!pending}
-              className={`${inputCls} disabled:opacity-50`}
-            />
-            <p className="text-[10px] text-gray-400 mt-1">
-              {batchRequired
-                ? `Batch of the incoming delivery. Replaces ${item.batch_number || 'the current batch'} on the stock row once the admin verifies receipt.`
-                : 'Leave blank if the supplier has not shipped yet — the admin records the real batch when the goods arrive.'}
-            </p>
           </div>
 
           {/* Expiry date — optional unless the caller demands it */}

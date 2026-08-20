@@ -82,7 +82,8 @@ export default function ConsultationTab() {
   const [showLabModal, setShowLabModal] = useState(false)
   const [showRxModal, setShowRxModal] = useState(false)
   const [showReportModal, setShowReportModal] = useState(false)
-  const [showProcedureModal, setShowProcedureModal] = useState(false)
+  const [procedureFee, setProcedureFee] = useState('')
+  const [editingProcedure, setEditingProcedure] = useState(false)
   const searchParams = useSearchParams()
   const visitId = searchParams.get('visitId')
 
@@ -284,10 +285,6 @@ export default function ConsultationTab() {
       toast.error(err.message || 'Could not save diagnosis')
     }
   }
-
-  // End Consultation ALWAYS sends to billing. The button is disabled while
-  // labs or medications are pending, so by the time the doctor can click it,
-  // everything is resolved. from_pharmacy:false clears the review banner.
   const handleEndConsultation = async () => {
     if (endBlockReason) {
       toast.error(endBlockReason)
@@ -315,31 +312,26 @@ export default function ConsultationTab() {
       await patchMutation.mutateAsync(parsed.data)
       toast.success('Consultation completed — patient sent to billing')
     } catch (err) {
-      toast.error(err.message || 'Could not end consultation')
+      return toast.error(err.message || 'Could not end consultation')
     }
   }
 
-  const handleAddProcedure = async (procedureType, procedureId, notes, price) => {
-    const payload = {
-      procedure_id: Number(procedureId),
-      procedure_type: procedureType,
-      notes: notes?.trim() || null,
-      doctor_name: user?.username || 'Doctor',
-      price: Math.round(Number(price) || 0),
-    }
-
-    const parsed = completeProcedureSchema.safeParse(payload)
-    if (!parsed.success) {
-      toast.error(parsed.error.errors[0].message)
+  const handleAddProcedure = async () => {
+    const raw = Number(procedureFee)
+    if (!Number.isFinite(raw) || raw <= 0) {
+      toast.error('Enter a valid procedure fee')
       return
     }
 
+    const price = Math.round(raw)
+
     try {
-      const result = await procedureMutation.mutateAsync(parsed.data)
-      toast.success(result.message || 'Procedure added to bill')
-      setShowProcedureModal(false)
+      const result = await procedureMutation.mutateAsync({ price })
+      toast.success(result.message || 'Procedure fee added')
+      setProcedureFee('')
+      setEditingProcedure(false)
     } catch (err) {
-      toast.error(err.message || 'Could not add procedure')
+      toast.error(err.message || 'Could not add procedure fee')
     }
   }
 
@@ -365,39 +357,35 @@ export default function ConsultationTab() {
     }
   }
 
-  const handleAddPrescription = async (rawItems) => {
-    if (!rawItems.length) {
-      toast.error('Add at least one medication')
-      return
-    }
-
-    const sanitizedItems = rawItems.map((it) => ({
-      medication: it.medication?.trim(),
-      product_id: it.product_id ? Number(it.product_id) : undefined,
-      drug_id: it.drug_id ? Number(it.drug_id) : undefined,
-      dosage: it.dosage?.trim() || '',
-      frequency: it.frequency?.trim() || '',
-      duration: it.duration?.trim() || '',
-      quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
-      unit_cost: Math.max(0, Math.round(Number(it.unit_cost) || 0)),
-      form: it.form || 'oral',
-    }))
-
-    const payload = { items: sanitizedItems }
-    const parsed = createPrescriptionSchema.safeParse(payload)
-    if (!parsed.success) {
-      toast.error(parsed.error.errors[0].message)
-      return
-    }
-
-    try {
-      await rxMutation.mutateAsync(parsed.data)
-      toast.success('Prescription sent to pharmacy')
-      setShowRxModal(false)
-    } catch (err) {
-      toast.error(err.message || 'Could not add prescription')
-    }
+ const handleAddPrescription = async (items) => {
+  const payload = {
+    items: items.map((it) => ({
+      medication: it.medication,
+      product_id: it.product_id,
+      drug_id: it.drug_id,
+      dosage: it.dosage,
+      frequency: it.frequency,
+      duration: it.duration,
+      quantity: Number(it.quantity),
+      unit_cost: Number(it.unit_cost),
+      form: it.form,
+    })),
   }
+
+  const parsed = createPrescriptionSchema.safeParse(payload)
+  if (!parsed.success) {
+    toast.error(parsed.error.errors[0].message)
+    return
+  }
+
+  try {
+    await rxMutation.mutateAsync(parsed.data)
+    toast.success('Prescription sent to pharmacy')
+    setShowRxModal(false)
+  } catch (err) {
+    toast.error(err.message || 'Could not add prescription')
+  }
+}
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -447,19 +435,6 @@ export default function ConsultationTab() {
   const hasReadyLabs = readyLabsCount > 0
   const patientForEval = { gender: visit.patient_gender, age: visit.patient_age }
 
-  // Returned meds still awaiting the pharmacist's restock confirmation are
-  // open pharmacy work — the visit cannot leave the doctor stage under them.
-  const returnedAwaitingCount = prescriptions.reduce(
-    (n, p) => n + p.items.filter((it) => it.status === 'returned').length, 0
-  )
-
-  // Empty-bill gate: the visit must carry at least one billable item before
-  // it can be sent to the billing desk. Consultation visits always pass
-  // (stage-1 fee); injection / family-planning visits have NO consultation
-  // fee, so this blocks ending until a procedure/service has been added.
-  const billTotal = visit.bill_total ??
-    ((visit.consultation_fee ?? 0) + (visit.lab_fee ?? 0) + (visit.medication_fee ?? 0) + (visit.procedure_fee ?? 0))
-  const noBill = billTotal <= 0
 
   // Single source of truth for why End Consultation is blocked (null = allowed)
   const endBlockReason =
@@ -467,11 +442,7 @@ export default function ConsultationTab() {
       ? `Cannot end — ${pendingLabsCount} lab test${pendingLabsCount > 1 ? 's are' : ' is'} still pending. Patient is at the lab.`
       : pendingRxCount > 0
         ? `Cannot end — ${pendingRxCount} medication${pendingRxCount > 1 ? 's are' : ' is'} pending at the pharmacy.`
-        : returnedAwaitingCount > 0
-          ? `Cannot end — ${returnedAwaitingCount} returned medication${returnedAwaitingCount > 1 ? 's are' : ' is'} awaiting pharmacy confirmation.`
-          : noBill
-            ? 'Cannot end — this visit has no billable service yet. Add a procedure/service before sending to billing.'
-            : null
+         : null
 
   // The report only opens once the chart has medical content to print.
   const reportHasContent = !!(
@@ -689,32 +660,88 @@ export default function ConsultationTab() {
           <Card className="overflow-hidden">
             <CardHeader
               title="Services & Procedures"
-              subtitle={visit?.procedure_fee > 0 ? `${visit.procedure_name} — ${formatMoney(visit.procedure_fee)}` : 'No procedure added'}
-              action={
-                <button
-                  onClick={() => setShowProcedureModal(true)}
-                  className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center gap-1.5"
-                >
-                  <Icon name="stethoscope" size={13} /> Add Procedure
-                </button>
+              subtitle={
+                visit?.procedure_fee > 0 && !editingProcedure
+                  ? `Fee: ${formatMoney(visit.procedure_fee)}`
+                  : editingProcedure
+                    ? 'Edit procedure fee'
+                    : 'No procedure fee added'
               }
             />
             <div className="p-4">
-              {visit?.procedure_fee > 0 ? (
+              {visit?.procedure_fee > 0 && !editingProcedure ? (
                 <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 px-3 py-2.5">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-[13px] font-semibold text-emerald-900 dark:text-emerald-200">{visit.procedure_name}</p>
-                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
-                        {visit.procedure_type === 'family_planning' ? 'Family Planning' : 'Procedure'} · by {visit.procedure_done_by || 'Doctor'}
+                      <p className="text-[13px] font-semibold text-emerald-900 dark:text-emerald-200">
+                        Procedure Fee
                       </p>
-                      {visit.procedure_notes && <p className="text-[11px] text-emerald-700 dark:text-emerald-300 mt-1 italic">"{visit.procedure_notes}"</p>}
+                      <p className="text-[10px] text-emerald-600 dark:text-emerald-400 mt-0.5">
+                        Added to bill
+                      </p>
                     </div>
-                    <span className="text-[14px] font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">{formatMoney(visit.procedure_fee)}</span>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[14px] font-bold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                        {formatMoney(visit.procedure_fee)}
+                      </span>
+                      <button
+                        onClick={() => {
+                          setProcedureFee(String(visit.procedure_fee))
+                          setEditingProcedure(true)
+                        }}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] transition-colors"
+                      >
+                        Edit
+                      </button>
+                    </div>
                   </div>
                 </div>
               ) : (
-                <p className="text-[12px] text-gray-400 text-center py-3">No procedure or service fee added. Click "Add Procedure" if a procedure was performed.</p>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">
+                      Procedure Fee (KSh)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={procedureFee}
+                      onChange={(e) => setProcedureFee(e.target.value)}
+                      placeholder="e.g. 1500"
+                      className={`${inputCls} tabular-nums`}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleAddProcedure}
+                      disabled={
+                        procedureMutation.isPending ||
+                        !procedureFee ||
+                        Number(procedureFee) <= 0
+                      }
+                      className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {procedureMutation.isPending ? (
+                        <Icon name="refresh" size={14} className="animate-spin" />
+                      ) : (
+                        <Icon name={editingProcedure ? 'save' : 'plus'} size={14} />
+                      )}
+                      {editingProcedure ? 'Update Fee' : 'Add to Bill'}
+                    </button>
+                    {editingProcedure && (
+                      <button
+                        onClick={() => {
+                          setEditingProcedure(false)
+                          setProcedureFee('')
+                        }}
+                        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           </Card>
@@ -862,6 +889,7 @@ export default function ConsultationTab() {
       {showLabModal && (
         <LabOrderModal
           onClose={() => setShowLabModal(false)}
+          existingRequests={labRequests}
           onSubmit={handleOrderLabs}
           loading={labMutation.isPending}
         />
@@ -871,20 +899,12 @@ export default function ConsultationTab() {
           onClose={() => setShowRxModal(false)}
           onSubmit={handleAddPrescription}
           loading={rxMutation.isPending}
-          allergies={visit?.allergies}
         />
       )}
       {showReportModal && (
         <MedicalReportModal
           visitId={visitId}
           onClose={() => setShowReportModal(false)}
-        />
-      )}
-      {showProcedureModal && (
-        <ProcedureModal
-          loading={procedureMutation.isPending}
-          onClose={() => setShowProcedureModal(false)}
-          onConfirm={handleAddProcedure}
         />
       )}
     </div>
@@ -1038,11 +1058,6 @@ function SoapSection({ letter, label, hint, open, onToggle, value, onChange, pla
   )
 }
 
-// ─── DiagnosisSearchSelect — searchable ICD catalog with free-text escape ────
-// Filters DIAGNOSIS_CATALOG by code or label; clicking sets BOTH the diagnosis
-// text and its code. If nothing in the catalog fits, the last row offers the
-// typed text as a free-text diagnosis (code cleared) — the catalog never
-// blocks recording an uncatalogued condition.
 function DiagnosisSearchSelect({ code, text, disabled, onSelect }) {
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
@@ -1203,14 +1218,6 @@ function VitalsField({ label, icon, value, onChange, placeholder, status, abnorm
   )
 }
 
-// ═══ Lab results viewer ════════════════════════════════════════════════════════
-// Renders each item's result_data against its catalog result_template — the
-// same shape the lab tech's ResultsModal writes and the printed ReportModal
-// reads. Ready items default open; anything with structured results can be
-// expanded/collapsed. Falls back to the simple `result` string when a test
-// has no template.
-
-// Flag colour per evaluation status (matches the printed report)
 const FLAG_TEXT = {
   low: 'font-bold text-amber-600 dark:text-amber-400',
   high: 'font-bold text-red-600 dark:text-red-400',
@@ -1747,22 +1754,45 @@ function ModalShell({ title, subtitle, onClose, children, footer, maxWidth = 'ma
 }
 
 // Lab order modal — fetches the real catalog from the DB and submits test ids.
-function LabOrderModal({ onClose, onSubmit, loading }) {
+function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
   const [selected, setSelected] = useState({}) // catalog id → true
   const [urgency, setUrgency] = useState('routine')
-
+  const [search, setSearch] = useState('')
+ 
   const { data, isLoading, error } = useQuery({
     queryKey: ['doctor', 'lab-catalog'],
     queryFn: () => api.get('/api/doctor/lab-catalog'),
     staleTime: 5 * 60 * 1000, // catalog rarely changes within a shift
   })
   const tests = data?.tests || []
-
+ 
+  // Tests already on this visit. Re-ordering one bills the patient twice, so
+  // flag them rather than silently allowing a duplicate.
+  const alreadyOrdered = new Map()
+  for (const r of existingRequests) {
+    for (const it of r.items || []) {
+      if (it.test_id != null) alreadyOrdered.set(it.test_id, it.status)
+    }
+  }
+ 
+  // Filtering only affects what is RENDERED. selected/total read from `tests`,
+  // so a test picked before typing stays selected and stays in the total when
+  // it filters out of view.
+  const q = search.trim().toLowerCase()
+  const visible = (q
+    ? tests.filter((t) =>
+      (t.name || '').toLowerCase().includes(q) ||
+      (t.category || '').toLowerCase().includes(q)
+    )
+    : tests
+  ).slice().sort((a, b) => (selected[b.id] ? 1 : 0) - (selected[a.id] ? 1 : 0))
+ 
   const toggle = (t) => setSelected((s) => ({ ...s, [t.id]: !s[t.id] }))
   const selectedTests = tests.filter((t) => selected[t.id])
   const selectedIds = selectedTests.map((t) => t.id)
   const totalCost = selectedTests.reduce((s, t) => s + (t.unit_cost || 0), 0)
-
+  const duplicateCount = selectedIds.filter((id) => alreadyOrdered.has(id)).length
+ 
   const footer = (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-3">
@@ -1776,14 +1806,14 @@ function LabOrderModal({ onClose, onSubmit, loading }) {
       <button
         onClick={() => onSubmit(selectedIds, urgency)}
         disabled={loading || selectedIds.length === 0}
-        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50"
+        className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />}
         Order Tests
       </button>
     </div>
   )
-
+ 
   return (
     <ModalShell
       title="Order Lab Tests"
@@ -1812,22 +1842,65 @@ function LabOrderModal({ onClose, onSubmit, loading }) {
           ))}
         </div>
       </div>
-
+ 
       {/* Test catalog */}
       <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
         Available Tests
       </label>
-
+ 
+      {/* Search */}
+      <div className="relative mb-2">
+        <Icon name="search" size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder={tests.length ? `Search ${tests.length} tests by name or category…` : 'Search tests…'}
+          className={`${inputCls} pl-9 pr-8`}
+          autoComplete="off"
+        />
+        {search && (
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            aria-label="Clear search"
+            className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+          >
+            <Icon name="x" size={12} />
+          </button>
+        )}
+      </div>
+ 
+      {/* Selection stays live while filtered — say so, since selected tests
+          can sit outside the current results. */}
+      {q && selectedIds.length > 0 && (
+        <p className="text-[10px] text-gray-400 mb-2">
+          {selectedIds.length} selected test{selectedIds.length !== 1 ? 's' : ''} kept while searching
+        </p>
+      )}
+ 
+      {duplicateCount > 0 && (
+        <div className="mb-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
+          <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            {duplicateCount} selected test{duplicateCount !== 1 ? 's have' : ' has'} already been ordered for this visit. Ordering again bills the patient a second time.
+          </p>
+        </div>
+      )}
+ 
       {isLoading ? (
         <p className="text-[12px] text-gray-400 py-6 text-center">Loading test catalog…</p>
       ) : error ? (
         <p className="text-[12px] text-red-500 py-6 text-center">Could not load lab tests. {error.message}</p>
       ) : tests.length === 0 ? (
         <p className="text-[12px] text-gray-400 py-6 text-center">No active lab tests in the catalog.</p>
+      ) : visible.length === 0 ? (
+        <p className="text-[12px] text-gray-400 py-6 text-center">No test matches &ldquo;{search.trim()}&rdquo;.</p>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          {tests.map((t) => {
+          {visible.map((t) => {
             const isSel = !!selected[t.id]
+            const prevStatus = alreadyOrdered.get(t.id)
             return (
               <button
                 key={t.id}
@@ -1855,6 +1928,12 @@ function LabOrderModal({ onClose, onSubmit, loading }) {
                     </span>
                   </div>
                 </div>
+                {prevStatus && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1.5 flex items-center gap-1">
+                    <Icon name="alert" size={10} className="shrink-0" />
+                    Already ordered · {cap(prevStatus)}
+                  </p>
+                )}
                 {t.reference_range && (
                   <p className="text-[10px] text-gray-400 mt-1.5">Ref: {t.reference_range}</p>
                 )}
@@ -1866,126 +1945,91 @@ function LabOrderModal({ onClose, onSubmit, loading }) {
     </ModalShell>
   )
 }
+ 
 
-function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
+// Drop-in replacement for PrescriptionModal + DrugSearchInput in ConsultationTab.jsx.
+// No new imports required.
+
+function PrescriptionModal({ onClose, onSubmit, loading }) {
   const [items, setItems] = useState([
-    { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '' },
+    { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: '', form: 'oral', drug_id: null, _stock: null },
   ])
 
-  // Drug stock from pharmacy — live stock + clinic price at the point of prescribing.
-  const { data: drugsData } = useQuery({
+  const { data: drugsData, isLoading: drugsLoading, error: drugsError } = useQuery({
     queryKey: ['pharmacy', 'drugs'],
     queryFn: () => api.get('/api/pharmacy/drugs'),
     staleTime: 30000,
   })
   const drugs = drugsData?.items || []
-  const markupPct = drugsData?.markup_pct ?? null
-
-  // Parse allergies into lowercase keywords for matching
-  const allergyKeywords = (allergies || '')
-    .split(/[,;]/)
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean)
-
-  function checkAllergy(drugName, genericName) {
-    if (!allergyKeywords.length) return null
-    const name = (drugName || '').toLowerCase()
-    const generic = (genericName || '').toLowerCase()
-    for (const kw of allergyKeywords) {
-      if (name.includes(kw) || generic.includes(kw)) {
-        return kw
-      }
-    }
-    return null
-  }
 
   const updateItem = (i, field, value) => {
-    setItems((arr) => arr.map((it, idx) => idx === i ? { ...it, [field]: value } : it))
-  }
-
-  // Drug picked from search — auto-fill medication, form, clinic price.
-  // Injectables: flat KSh 500 fee default (editable); oral: clinic unit_price.
-  //
-  // FIX (controlled-input): drug.unit_price is a COMPUTED field the pharmacy
-  // endpoint must supply (DrugStock has no unit_price column — it has
-  // unit_cost/normal_price/promotional_price/wholesale_price). If the endpoint
-  // returns raw rows, unit_price is undefined and would flip the controlled
-  // unit-cost input to uncontrolled. Fallback chain keeps the value defined:
-  // computed clinic price → un-marked-up normal_price → 0. NOTE: the fallback
-  // bills at normal_price (no markup) — the real fix is the pharmacy
-  // controller emitting unit_price/pharmacy_normal_price/markup_pct.
-  const selectDrug = (i, drug) => {
-    const isInj = drug.form === 'injection'
-    const clinicPrice = drug.unit_price ?? drug.normal_price ?? 0
-    setItems((arr) => arr.map((it, idx) => idx === i ? {
-      ...it,
-      medication: drug.name ?? '',
-      form: isInj ? 'injection' : 'oral',
-      unit_cost: isInj ? 500 : clinicPrice,
-      drug_id: drug.id,
-      _stock: drug.current_stock ?? null,
-      _reorder_level: drug.reorder_level ?? null,
-      _pharmacy_normal_price: drug.pharmacy_normal_price ?? drug.normal_price ?? null,
-      _unit: drug.unit ?? '',
-      _allergy_hit: checkAllergy(drug.name, drug.generic_name),
-    } : it))
-  }
-
-  // Toggle Oral / Injection — resets the selection since the drug list changes.
-  const setForm = (i, form) => {
     setItems((arr) => arr.map((it, idx) => {
       if (idx !== i) return it
-      const updated = { ...it, form, medication: '', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '', _allergy_hit: null }
-      updated.unit_cost = form === 'injection' ? 500 : 0
-      return updated
+
+      // Quantity can never exceed the stock of the linked drug.
+      if (field === 'quantity' && it._stock != null && Number(value) > it._stock) {
+        return { ...it, quantity: it._stock }
+      }
+
+      // Typing over a selected drug unlinks it. Without this the order carries
+      // drug_id X while reading as drug Y — the pharmacy decrements the wrong
+      // stock line, and the quantity cap enforces the wrong drug's ceiling.
+      if (field === 'medication' && it.drug_id) {
+        return { ...it, medication: value, drug_id: null, _stock: null, form: 'oral' }
+      }
+
+      return { ...it, [field]: value }
     }))
   }
 
-  // Replace the existing footer button onClick in PrescriptionModal
+  // Selecting a drug links it and carries its form. Price stays manual.
+  const selectDrug = (i, drug) => {
+    setItems((arr) => arr.map((it, idx) => idx === i ? {
+      ...it,
+      medication: drug.name ?? '',
+      form: drug.form ?? 'oral',
+      drug_id: drug.id,
+      _stock: drug.current_stock ?? null,
+    } : it))
+  }
+
+  const addItem = () => setItems((arr) => [...arr, { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: '', form: 'oral', drug_id: null, _stock: null }])
+  const removeItem = (i) => setItems((arr) => arr.filter((_, idx) => idx !== i))
+
   const handleModalSubmit = () => {
-    const payloadItems = items
-      .filter((it) => it.medication.trim() && !it._allergy_hit)
-      .map(({ _stock, _reorder_level, _pharmacy_normal_price, _unit, _allergy_hit, ...rest }) => ({
-        medication: rest.medication?.trim(),
-        product_id: rest.product_id ? Number(rest.product_id) : undefined,
-        drug_id: rest.drug_id ? Number(rest.drug_id) : undefined,
-        dosage: rest.dosage?.trim() || '',
-        frequency: rest.frequency?.trim() || '',
-        duration: rest.duration?.trim() || '',
-        quantity: Math.max(1, Math.round(Number(rest.quantity) || 1)),
-        unit_cost: Math.max(0, Math.round(Number(rest.unit_cost) || 0)),
-        form: rest.form || 'oral',
-      }))
+    const payloadItems = validItems.map((it) => ({
+      medication: it.medication?.trim(),
+      product_id: Number(it.drug_id),
+      drug_id: Number(it.drug_id),
+      dosage: it.dosage?.trim() || '',
+      frequency: it.frequency?.trim() || '',
+      duration: it.duration?.trim() || '',
+      quantity: Math.max(1, Math.round(Number(it.quantity) || 1)),
+      unit_cost: Math.max(0, Math.round(Number(it.unit_cost) || 0)),
+      form: it.form || 'oral',
+    }))
 
     onSubmit(payloadItems)
   }
 
-
-  const addItem = () => setItems((arr) => [...arr, { medication: '', dosage: '', frequency: '', duration: '', quantity: 1, unit_cost: 0, form: 'oral', drug_id: null, _stock: null, _reorder_level: null, _pharmacy_normal_price: null, _unit: '' }])
-  const removeItem = (i) => setItems((arr) => arr.filter((_, idx) => idx !== i))
-
-  const totalCost = items.reduce((s, it) => s + (parseFloat(it.unit_cost) || 0) * (parseInt(it.quantity) || 0), 0)
-
-  // Strip ONLY the _-prefixed UI fields. form and drug_id go to the API —
-  // drug_id is what lets the pharmacist restock the exact drug on return.
-  const validItems = items
-    .filter((it) => it.medication.trim() && !it._allergy_hit)
-    .map(({ _stock, _reorder_level, _pharmacy_normal_price, _unit, _allergy_hit, ...rest }) => rest)
-
-  const hasAllergyConflict = items.some((it) => it._allergy_hit)
+  // A row is only sendable when it is linked to a real stock item AND priced.
+  // drug_id carries the medication name, so no separate name check is needed.
+  const validItems = items.filter((it) =>
+    it.drug_id && Number(it.unit_cost) >= 1 && Number(it.quantity) >= 1
+  )
+  const totalCost = validItems.reduce((s, it) => s + Number(it.unit_cost) * Number(it.quantity), 0)
 
   const footer = (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-3">
         <span className="text-[11px] text-gray-500 dark:text-gray-400">
-          {validItems.length} medication{validItems.length !== 1 ? 's' : ''} · total
+          {validItems.length} medication{validItems.length !== 1 ? 's' : ''}
         </span>
         <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(totalCost)}</span>
       </div>
       <button
         onClick={handleModalSubmit}
-        disabled={loading || validItems.length === 0 || hasAllergyConflict}
-        title={hasAllergyConflict ? 'Remove the allergy-conflicting medication to proceed' : undefined}
+        disabled={loading || validItems.length === 0}
         className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="send" size={14} />}
@@ -1997,185 +2041,81 @@ function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
   return (
     <ModalShell
       title="Add Prescription"
-      subtitle={`Search the pharmacy drug stock — clinic price${markupPct != null ? ` (${markupPct}%)` : ''} is auto-applied`}
+      subtitle="Select medications from pharmacy stock and enter the unit price for each"
       onClose={onClose}
       footer={footer}
     >
       <div className="space-y-4">
-        {allergyKeywords.length > 0 && (
-          <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 px-3 py-2 flex items-start gap-2">
-            <Icon name="alert" size={13} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-            <p className="text-[11px] text-red-700 dark:text-red-400">
-              <span className="font-semibold">Patient allergy alert:</span> {allergies}. Drugs matching these allergens will be flagged and blocked from prescription.
-            </p>
-          </div>
-        )}
+
         {items.map((it, i) => {
-          const stock = it._stock
-          const reorder = it._reorder_level
-          const qty = parseInt(it.quantity) || 0
-          const outOfStock = it.drug_id != null && stock === 0
-          const exceedsStock = it.drug_id != null && stock > 0 && qty > stock
-          const allergyHit = it._allergy_hit
           return (
-            <div key={i} className={`rounded-lg border p-3 ${allergyHit ? 'border-red-300 dark:border-red-900/60 bg-red-50/30 dark:bg-red-950/10' : 'border-gray-200 dark:border-gray-700/60'}`}>
+            <div key={i} className="rounded-lg border border-gray-200 dark:border-gray-700/60 p-3">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                   Medication #{i + 1}
-                  {allergyHit && (
-                    <span className="ml-2 text-red-600 dark:text-red-400 normal-case tracking-normal font-bold">
-                      ⚠ ALLERGY CONFLICT
-                    </span>
-                  )}
                 </span>
                 {items.length > 1 && (
-                  <button
-                    onClick={() => removeItem(i)}
-                    className="text-[11px] text-red-500 hover:text-red-600 dark:text-red-400 flex items-center gap-1"
-                  >
+                  <button type="button" onClick={() => removeItem(i)} className="text-[11px] text-red-500 hover:text-red-600 dark:text-red-400 flex items-center gap-1">
                     <Icon name="trash" size={12} /> Remove
                   </button>
                 )}
               </div>
 
-              {/* Oral / Injection type toggle */}
-              <div className="mb-2">
-                <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Type</label>
-                <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setForm(i, 'oral')}
-                    className={[
-                      'px-3 py-1.5 text-[12px] font-medium flex items-center gap-1.5 transition-colors',
-                      it.form !== 'injection'
-                        ? 'bg-[#1a6cbf] text-white'
-                        : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20',
-                    ].join(' ')}
-                  >
-                    <Icon name="pill" size={12} /> Oral
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setForm(i, 'injection')}
-                    className={[
-                      'px-3 py-1.5 text-[12px] font-medium flex items-center gap-1.5 transition-colors border-l border-gray-200 dark:border-gray-700/60',
-                      it.form === 'injection'
-                        ? 'bg-fuchsia-600 text-white'
-                        : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20',
-                    ].join(' ')}
-                  >
-                    <Icon name="syringe" size={12} /> Injection
-                  </button>
-                </div>
-                {it.form === 'injection' && (
-                  <p className="text-[10px] text-fuchsia-600 dark:text-fuchsia-400 mt-1">
-                    Injectable medications are charged at a flat fee of KSh 500 (editable). Select the injectable drug below.
-                  </p>
-                )}
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {/* Drug search */}
                 <div className="sm:col-span-2">
                   <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Medication *</label>
                   <DrugSearchInput
                     value={it.medication}
                     drugs={drugs}
-                    formFilter={it.form}
+                    loading={drugsLoading}
+                    error={drugsError}
                     onChange={(v) => updateItem(i, 'medication', v)}
                     onSelect={(drug) => selectDrug(i, drug)}
                   />
-                  {/* Allergy conflict — highest priority */}
-                  {allergyHit && (
-                    <div className="mt-2 rounded-lg bg-red-100 dark:bg-red-950/40 border border-red-300 dark:border-red-900 px-3 py-2 flex items-start gap-2">
-                      <Icon name="xCircle" size={14} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
-                      <div>
-                        <p className="text-[12px] font-semibold text-red-700 dark:text-red-400">
-                          ALLERGY CONFLICT — "{allergyHit}"
-                        </p>
-                        <p className="text-[11px] text-red-600 dark:text-red-400 mt-0.5">
-                          This patient is allergic to <span className="font-semibold">{allergyHit}</span>. Select a different medication or remove this item. The prescription cannot be sent while this conflict exists.
-                        </p>
-                      </div>
-                    </div>
+                  {it.medication.trim() && !it.drug_id && (
+                    <p className="text-[10px] text-red-600 dark:text-red-400 mt-1">
+                      Select a medication from the list — only drugs in pharmacy stock can be prescribed
+                    </p>
                   )}
-                  {/* Stock badge + price breakdown once a drug is selected */}
-                  {it.drug_id != null && !allergyHit && (
-                    <div className="mt-2 space-y-1.5 rounded-lg bg-gray-50 dark:bg-gray-700/20 px-3 py-2">
-                      <div className="flex items-center gap-2 flex-wrap text-[10px]">
-                        <StockPill stock={stock} reorder={reorder} />
-                        <span className="text-gray-500 dark:text-gray-400">
-                          Pharmacy price: <span className="tabular-nums">{formatMoney(it._pharmacy_normal_price ?? 0)}</span>
-                          {' · '}
-                          Clinic price{markupPct != null ? ` (${markupPct}%)` : ''}: <span className="font-semibold text-[#1a6cbf] dark:text-blue-400 tabular-nums">{formatMoney(it.unit_cost ?? 0)}</span>
-                        </span>
-                      </div>
-                      {outOfStock && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-red-600 dark:text-red-400 font-semibold">
-                          <Icon name="xCircle" size={12} /> OUT OF STOCK — select an alternative or restock
-                        </div>
-                      )}
-                      {exceedsStock && (
-                        <div className="flex items-center gap-1.5 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
-                          <Icon name="alert" size={12} />
-                          Requested quantity ({qty}) exceeds current stock ({stock}). Pharmacy will partially dispense.
-                        </div>
-                      )}
-                    </div>
+                  {it.drug_id && (
+                    <p className="text-[10px] text-gray-400 mt-1">{it._stock} in stock</p>
                   )}
                 </div>
+
                 <div>
                   <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Dosage</label>
-                  <input
-                    type="text"
-                    value={it.dosage ?? ''}
-                    onChange={(e) => updateItem(i, 'dosage', e.target.value)}
-                    placeholder="e.g. 500mg"
-                    className={inputCls}
-                  />
+                  <input type="text" value={it.dosage ?? ''} onChange={(e) => updateItem(i, 'dosage', e.target.value)} placeholder="e.g. 500mg" className={inputCls} maxLength={20} />
                 </div>
                 <div>
                   <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Frequency</label>
-                  <input
-                    type="text"
-                    value={it.frequency ?? ''}
-                    onChange={(e) => updateItem(i, 'frequency', e.target.value)}
-                    placeholder="e.g. 3x daily"
-                    className={inputCls}
-                  />
+                  <input type="text" value={it.frequency ?? ''} onChange={(e) => updateItem(i, 'frequency', e.target.value)} placeholder="e.g. 3x daily" className={inputCls} maxLength={20} />
                 </div>
                 <div>
                   <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Duration</label>
-                  <input
-                    type="text"
-                    value={it.duration ?? ''}
-                    onChange={(e) => updateItem(i, 'duration', e.target.value)}
-                    placeholder="e.g. 7 days"
-                    className={inputCls}
-                  />
+                  <input type="text" value={it.duration ?? ''} onChange={(e) => updateItem(i, 'duration', e.target.value)} placeholder="e.g. 7 days" className={inputCls} maxLength={20} />
                 </div>
                 <div>
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Quantity</label>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Quantity *</label>
                   <input
                     type="number"
                     min="1"
+                    step="1"
+                    max={it._stock ?? undefined}
                     value={it.quantity ?? ''}
                     onChange={(e) => updateItem(i, 'quantity', e.target.value)}
-                    className={inputCls}
+                    className={`${inputCls} tabular-nums`}
                   />
                 </div>
                 <div className="sm:col-span-2">
-                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
-                    {it.form === 'injection'
-                      ? 'Injection Fee (KSh) — default 500, editable'
-                      : 'Unit Cost (KSh) — auto-filled from clinic price'}
-                  </label>
+                  <label className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Unit Cost (KSh) *</label>
                   <input
                     type="number"
-                    min="0"
+                    min="1"
                     step="any"
                     value={it.unit_cost ?? ''}
                     onChange={(e) => updateItem(i, 'unit_cost', e.target.value)}
-                    placeholder="0"
+                    placeholder="Enter price e.g. 250"
                     className={`${inputCls} tabular-nums`}
                   />
                 </div>
@@ -2185,6 +2125,7 @@ function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
         })}
 
         <button
+          type="button"
           onClick={addItem}
           className="w-full px-4 py-2 rounded-lg text-[13px] font-medium border border-dashed border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-[#1a6cbf] flex items-center justify-center gap-2"
         >
@@ -2197,29 +2138,23 @@ function PrescriptionModal({ onClose, onSubmit, loading, allergies }) {
 
 // ─── Drug search dropdown (used inside PrescriptionModal) ────────────────────
 
-function DrugSearchInput({ value, drugs, onChange, onSelect, formFilter }) {
+function DrugSearchInput({ value, drugs, loading, error, onChange, onSelect }) {
   const [focused, setFocused] = useState(false)
 
-  // Filter by form type (oral vs injection) when a formFilter is set
-  const formFiltered = formFilter === 'injection'
-    ? drugs.filter((d) => d.form === 'injection')
-    : formFilter === 'oral'
-      ? drugs.filter((d) => d.form !== 'injection')
-      : drugs
+  // Out-of-stock drugs are hidden — a zero-stock pick would clamp quantity to 0
+  // and leave a row that can never be sent.
+  const inStock = drugs.filter((d) => (d.current_stock ?? 0) > 0)
 
-  // Guards: value/generic_name can be undefined if an API row is malformed —
-  // .trim()/.toLowerCase() on undefined would CRASH the modal, not just warn.
+  // Guards: name/generic_name can be undefined if an API row is malformed —
+  // .toLowerCase() on undefined would CRASH the modal, not just warn.
   const query = (value || '').trim().toLowerCase()
-  const filtered = query
-    ? formFiltered.filter((d) =>
+  const filtered = (query
+    ? inStock.filter((d) =>
       (d.name || '').toLowerCase().includes(query) ||
       (d.generic_name || '').toLowerCase().includes(query)
-    ).slice(0, 8)
-    : formFiltered.slice(0, 8)
-
-  const placeholder = formFilter === 'injection'
-    ? 'Search injectable medications (e.g. Ceftriaxone)…'
-    : 'Search drug name or generic (e.g. Amoxicillin)…'
+    )
+    : inStock
+  ).slice(0, 8)
 
   return (
     <div className="relative">
@@ -2229,7 +2164,7 @@ function DrugSearchInput({ value, drugs, onChange, onSelect, formFilter }) {
         onChange={(e) => onChange(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setTimeout(() => setFocused(false), 150)}
-        placeholder={placeholder}
+        placeholder="Search drug name or generic (e.g. Amoxicillin)…"
         className={inputCls}
         autoComplete="off"
       />
@@ -2250,129 +2185,32 @@ function DrugSearchInput({ value, drugs, onChange, onSelect, formFilter }) {
                   </p>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-[10px] font-medium tabular-nums ${d.current_stock < 10 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400'}`}>
+                    {d.current_stock} left
+                  </span>
                   <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 tabular-nums">
                     {formatMoney(d.unit_price ?? d.normal_price ?? 0)}
                   </span>
-                  <StockPill stock={d.current_stock} reorder={d.reorder_level} />
                 </div>
               </div>
             </button>
           ))}
         </div>
       )}
-      {focused && filtered.length === 0 && query && (
+      {focused && filtered.length === 0 && (
         <div className="absolute z-30 mt-1 w-full rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 shadow-lg px-3 py-2">
-          <p className="text-[11px] text-gray-400">No matching drug in stock. You may still type a custom medication.</p>
+          <p className={`text-[11px] ${error ? 'text-red-600 dark:text-red-400' : 'text-gray-400'}`}>
+            {error
+              ? `Could not load pharmacy stock. ${error.message}`
+              : loading
+                ? 'Loading pharmacy stock…'
+                : query
+                  ? 'No matching drug in pharmacy stock.'
+                  : 'No medications in stock.'}
+          </p>
         </div>
       )}
     </div>
   )
 }
 
-function StockPill({ stock, reorder }) {
-  const s = stock ?? 0
-  const r = reorder ?? 0
-  const cls = s === 0
-    ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-    : s <= r
-      ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-      : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
-  const label = s === 0 ? 'OUT' : s <= r ? 'LOW' : 'IN STOCK'
-  return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${cls}`}>
-      <Icon name="box" size={10} /> {label} {s}
-    </span>
-  )
-}
-
-// ─── ProcedureModal — doctor selects a procedure/FP method to add to the bill ─
-
-function ProcedureModal({ loading, onClose, onConfirm }) {
-  const [procedureType, setProcedureType] = useState('procedure')
-  const [procedureId, setProcedureId] = useState('')
-  const [price, setPrice] = useState('')
-  const [notes, setNotes] = useState('')
-
-  const { data: proceduresData } = useQuery({
-    queryKey: ['procedures'],
-    queryFn: () => api.get('/api/procedures'),
-    staleTime: 60000,
-  })
-  const procedures = proceduresData?.procedures || []
-  const fpMethods = proceduresData?.familyPlanningMethods || []
-
-  const items = procedureType === 'family_planning' ? fpMethods : procedures
-  const selectedItem = items.find((it) => it.id === Number(procedureId))
-
-  const handleSelectProcedure = (e) => {
-    const id = e.target.value
-    setProcedureId(id)
-    const matched = items.find((it) => it.id === Number(id))
-    // Guard: a malformed catalog row without price would set the literal
-    // string "undefined" into the controlled price input.
-    if (matched) setPrice(String(matched.price ?? 0))
-  }
-
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose() }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [loading, onClose])
-
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    if (!procedureId || loading) return
-    onConfirm(procedureType, procedureId, notes.trim(), Number(price) || 0)
-  }
-
-  const isPriceEdited = selectedItem && Number(price) !== selectedItem.price
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !loading && onClose()}>
-      <div className="relative w-full max-w-md rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl" onClick={(e) => e.stopPropagation()}>
-        <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700/60 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-[#1a6cbf]/10 text-[#1a6cbf] dark:bg-blue-900/40 dark:text-blue-400 flex items-center justify-center"><Icon name="stethoscope" size={16} /></div>
-            <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Add Procedure / Service</h3>
-          </div>
-          <button onClick={onClose} disabled={loading} className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40 disabled:opacity-50"><Icon name="x" size={16} /></button>
-        </div>
-        <form onSubmit={handleSubmit} className="p-5 space-y-4">
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Type</label>
-            <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden w-full">
-              <button type="button" onClick={() => { setProcedureType('procedure'); setProcedureId(''); setPrice('') }} className={['flex-1 px-3 py-2 text-[13px] font-medium transition-colors', procedureType !== 'family_planning' ? 'bg-[#1a6cbf] text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20'].join(' ')}>Procedure</button>
-              <button type="button" onClick={() => { setProcedureType('family_planning'); setProcedureId(''); setPrice('') }} className={['flex-1 px-3 py-2 text-[13px] font-medium transition-colors border-l border-gray-200 dark:border-gray-700/60', procedureType === 'family_planning' ? 'bg-fuchsia-600 text-white' : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20'].join(' ')}>Family Planning</button>
-            </div>
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">{procedureType === 'family_planning' ? 'Family Planning Method' : 'Procedure'} *</label>
-            <select value={procedureId} onChange={handleSelectProcedure} className="w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf] cursor-pointer">
-              <option value="">Select…</option>
-              {items.map((it) => (<option key={it.id} value={it.id}>{it.name} — {formatMoney(it.price)}</option>))}
-            </select>
-          </div>
-          {selectedItem && (
-            <div>
-              <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Price (KSh) {isPriceEdited && <span className="text-amber-500 normal-case tracking-normal">· edited (default {formatMoney(selectedItem.price)})</span>}</label>
-              <input type="number" min="0" step="any" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full px-3 py-2 text-[15px] font-semibold rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]" />
-              {isPriceEdited && <button type="button" onClick={() => setPrice(String(selectedItem.price ?? 0))} className="text-[10px] text-[#1a6cbf] dark:text-blue-400 hover:underline mt-1">Reset to default ({formatMoney(selectedItem.price)})</button>}
-            </div>
-          )}
-          <div>
-            <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Notes (optional)</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="e.g. Injection administered in left deltoid" className={`${inputCls} resize-none`} />
-          </div>
-          <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900/60 px-3 py-2 flex items-start gap-2">
-            <Icon name="info" size={13} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
-            <p className="text-[11px] text-blue-700 dark:text-blue-400">The fee is added to the bill. Use <span className="font-semibold">End Consultation</span> to send the patient to the billing desk when all services are complete.</p>
-          </div>
-          <div className="flex items-center gap-2 pt-1">
-            <button type="button" onClick={onClose} disabled={loading} className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 disabled:opacity-50">Cancel</button>
-            <button type="submit" disabled={loading || !procedureId} className="flex-1 px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">{loading ? <Spinner size={13} /> : <Icon name="plus" size={14} />} Add to Bill</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
-}

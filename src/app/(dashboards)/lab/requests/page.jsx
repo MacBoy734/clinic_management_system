@@ -25,7 +25,7 @@ export default function RequestsTab() {
   const [expanded, setExpanded] = useState(null) // request id
   const [report, setReport] = useState(null) // request to view report
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['lab', 'requests', filter],
     queryFn: () => api.get(`/api/lab/requests?status=${filter}`),
     refetchInterval: 30000,
@@ -58,9 +58,23 @@ export default function RequestsTab() {
             </button>
           ))}
         </div>
-        <span className="text-[11px] text-gray-500 dark:text-gray-400">
-          {requests.length} request{requests.length !== 1 ? 's' : ''}
-        </span>
+                <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {requests.length} request{requests.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* Table */}

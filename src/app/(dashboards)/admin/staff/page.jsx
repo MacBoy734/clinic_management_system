@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import toast from 'react-hot-toast'
 import api from '@/lib/api'
+import { Icon } from '@/utils/helpers'
 
 // ─── Config ───────────────────────────────────────────────────────────────────
 const ROLES = ['doctor', 'receptionist', 'lab_tech', 'pharmacist']
@@ -376,6 +377,39 @@ export default function StaffPage() {
 
   return (
     <>
+      {/* ── Page header ── */}
+      <div className="flex items-start justify-between mb-6">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            Staff Management
+          </h2>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {staff.length} member{staff.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => staffQuery.refetch()}
+            disabled={staffQuery.isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={staffQuery.isFetching ? 'animate-spin' : ''} 
+            />
+            {staffQuery.isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button
+            onClick={() => setModal('add')}
+            className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold
+                       text-white transition-colors
+                       bg-[#0c2340] hover:bg-[#0f2d52] dark:bg-blue-700 dark:hover:bg-blue-600">
+            + Add Staff
+          </button>
+        </div>
+      </div>
+      
       {/* ── Page header ── */}
       <div className="flex items-start justify-between mb-6">
         <div>

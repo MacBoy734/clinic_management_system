@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import toast from 'react-hot-toast'
+import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 
 // ─── Role definitions ────────────────────────────────────────────────────────
@@ -149,55 +150,45 @@ export default function LoginPage() {
   }
 
   const handleSubmit = async (e) => {
-    e.preventDefault()
-    if (!selected) {
-       setError('Please select your role first.')
-       toast.error('Please select your role first.')
-       return
-    }
-    if (!username) {
-      setError('Please enter your username.')
-      toast.error('Please enter your username.')
-      return
-    }
-    if (!password) {
-      setError('Please enter your password.')
-      toast.error('Please enter your password.')
-      return
-    }
-    setLoading(true)
-    setError('')
-    setSuccess('Signing you in…')
-
-    try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ role: selected, username, password }),
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        setSuccess('')
-        setError(data.error || 'Incorrect credentials. Try again.')
-        toast.error(data.error || 'Incorrect credentials. Try again.')
-        return
-      }
-
-      setUser(data.user)
-      toast.success(`Welcome, ${data.user.username}`)
-
-      router.push(DASHBOARDS[data.user.role])
-    } catch {
-      setSuccess('')
-      setError('Could not reach the server. Check your connection.')
-      toast.error('Could not reach the server. Check your connection.')
-    } finally {
-      setLoading(false)
-    }
+  e.preventDefault()
+  if (!selected) {
+    setError('Please select your role first.')
+    toast.error('Please select your role first.')
+    return
   }
+  if (!username) {
+    setError('Please enter your username.')
+    toast.error('Please enter your username.')
+    return
+  }
+  if (!password) {
+    setError('Please enter your password.')
+    toast.error('Please enter your password.')
+    return
+  }
+  setLoading(true)
+  setError('')
+  setSuccess('Signing you in…')
+
+  try {
+    const data = await api.post('/api/auth/login', {
+      role: selected,
+      username,
+      password,
+    })
+
+    setUser(data.user)
+    toast.success(`Welcome, ${data.user.username}`)
+    router.push(DASHBOARDS[data.user.role])
+  } catch (err) {
+    setSuccess('')
+    const msg = err.message || 'Incorrect credentials. Try again.'
+    setError(msg)
+    toast.error(msg)
+  } finally {
+    setLoading(false)
+  }
+}
 
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-slate-950 flex items-center justify-center p-4">

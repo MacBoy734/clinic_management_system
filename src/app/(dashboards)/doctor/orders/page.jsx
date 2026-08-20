@@ -42,7 +42,7 @@ export default function PharmacyOrdersTab() {
   const [filter, setFilter] = useState('all')
   const [showModal, setShowModal] = useState(false)
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['doctor', 'orders'],
     queryFn: () => api.get('/api/doctor/orders'),
     refetchInterval: 30000,
@@ -143,12 +143,26 @@ export default function PharmacyOrdersTab() {
             )
           })}
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
-        >
-          <Icon name="plus" size={13} /> New Order
-        </button>
+                <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button
+            onClick={() => setShowModal(true)}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
+          >
+            <Icon name="plus" size={13} /> New Order
+          </button>
+        </div>
       </div>
 
       {/* Orders */}

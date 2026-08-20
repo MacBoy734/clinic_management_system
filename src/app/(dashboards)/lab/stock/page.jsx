@@ -8,7 +8,7 @@
 import { useState, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import api  from '@/lib/api'
+import api from '@/lib/api'
 import {
   StatCard, SkeletonCard, SkeletonTable, ErrorState, EmptyState,
   Card, Badge, Icon,
@@ -30,7 +30,7 @@ export default function StockTab() {
   const queryClient = useQueryClient()
   const [restocking, setRestocking] = useState(null)
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['lab', 'stock'],
     queryFn: () => api.get('/api/lab/stock'),
     refetchInterval: 30000,
@@ -111,7 +111,21 @@ export default function StockTab() {
           sublabel="current inventory"
         />
       </div>
-
+      {/* Refresh bar */}
+      <div className="flex items-center justify-end">
+        <button
+          onClick={() => refetch()}
+          disabled={isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon
+            name="refresh"
+            size={13}
+            className={isFetching ? 'animate-spin' : ''}
+          />
+          {isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
       {/* Stock table */}
       {!items.length ? (
         <EmptyState

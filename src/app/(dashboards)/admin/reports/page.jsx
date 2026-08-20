@@ -319,8 +319,24 @@ function VisitsSubTab({ range, exportCsv }) {
 
   const chartData = byDay.map((d) => ({ day: d.day, visits: d.count }))
 
-  return (
+    return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Visit Reports</h3>
+        <button
+          onClick={() => statsQ.refetch()}
+          disabled={statsQ.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon 
+            name="refresh" 
+            size={13} 
+            className={statsQ.isFetching ? 'animate-spin' : ''} 
+          />
+          {statsQ.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatTile label="Total Visits" value={totalVisits} icon="users" color="blue" sublabel="in selected range" />
         <StatTile label="Avg Per Day" value={avgPerDay} icon="barChart" color="purple" sublabel="visits / day" />
@@ -459,8 +475,24 @@ function LabSubTab({ range, exportCsv }) {
   const chartData = byDay.map((d) => ({ day: d.day, requests: d.count }))
   const exportRows = topTests.map((t) => ({ Test: t.name, Count: t.count }))
 
-  return (
+    return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Lab Reports</h3>
+        <button
+          onClick={() => q.refetch()}
+          disabled={q.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon 
+            name="refresh" 
+            size={13} 
+            className={q.isFetching ? 'animate-spin' : ''} 
+          />
+          {q.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <StatTile label="Total Requests" value={totalRequests} icon="testTube" color="purple" sublabel="in selected range" />
         <StatTile label="Avg Turnaround" value={`${avgTurnaround}h`} icon="timer" color="blue" sublabel="ordered → completed" />
@@ -601,8 +633,24 @@ function PharmacySubTab({ range, exportCsv }) {
   const chartData = byDay.map((d) => ({ day: d.day, dispensed: d.dispensed, otc: d.otc }))
   const exportRows = topDrugs.map((d) => ({ Drug: d.name, QuantityDispensed: d.count }))
 
-  return (
+    return (
     <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Pharmacy Reports</h3>
+        <button
+          onClick={() => q.refetch()}
+          disabled={q.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon 
+            name="refresh" 
+            size={13} 
+            className={q.isFetching ? 'animate-spin' : ''} 
+          />
+          {q.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <StatTile label="Prescriptions Dispensed" value={dispensedTotal} icon="checkCircle" color="green" sublabel="in selected range" />
         <StatTile label="OTC Sales" value={otcTotal} icon="store" color="amber" sublabel="in selected range" />

@@ -1,32 +1,5 @@
 'use client'
 
-// StockTab — the pharmacy's own inventory screen.
-//
-// This is the ONE place that sees the whole catalogue: medications,
-// consumables (gloves, syringes, scalpel blades) and general goods (soap,
-// pads). Narrowing happens through the CATEGORY chips at the top; the
-// sub-category chips below them scope to whatever category is selected.
-//
-// Everywhere else filters server-side instead:
-//   doctor Drug Stock tab     → category = medication
-//   doctor prescription modal → category = medication
-//   supply-order pickers      → category != medication
-//
-// APIs:
-//   GET  /api/pharmacy/stock                    → every category
-//   GET  /api/pharmacy/stock?category=medication
-//        → { items: [...], stats: {...}, categories: [...], sub_categories: [...] }
-//   GET  /api/pharmacy/restock-requests?status=pending
-//   POST /api/pharmacy/restock-requests
-//        → { product_id, requested_qty, batch_number?, expiry_date?, notes? }
-//
-// Restocking is a REQUEST, not an edit. Stock, batch and expiry change only
-// when an admin verifies the request and records how many units actually
-// arrived, so nothing on this screen mutates a product directly.
-//
-// batch_number and expiry_date are OPTIONAL on the request — they are
-// unknowable until the goods land, which is the admin's verify step.
-
 import { useState, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
@@ -128,7 +101,11 @@ export default function StockTab() {
     refetchInterval: 30000,
     staleTime: 15000,
   })
-
+  const isRefetching = stockQuery.isFetching || requestsQuery.isFetching
+  const refetchAll = () => {
+    stockQuery.refetch()
+    requestsQuery.refetch()
+  }
   const restockMutation = useMutation({
     mutationFn: ({ id, quantity, batchNumber, expiryDate, notes }) =>
       api.post('/api/pharmacy/restock-requests', {
@@ -272,6 +249,22 @@ export default function StockTab() {
         />
       </div>
 
+      {/* Refresh bar */}
+      <div className="flex items-center justify-end">
+        <button
+          onClick={() => refetchAll()}
+          disabled={isRefetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon
+            name="refresh"
+            size={13}
+            className={isRefetching ? 'animate-spin' : ''}
+          />
+          {isRefetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       {/* Awaiting approval */}
       {pendingRequests.length > 0 && (
         <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
@@ -339,37 +332,6 @@ export default function StockTab() {
             className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
           />
         </div>
-
-        {subCategories.length > 0 && (
-          <div className="flex items-center gap-2 flex-wrap">
-            {['all', ...subCategories].map((sc) => {
-              const count = sc === 'all'
-                ? scoped.length
-                : scoped.filter((i) => i.sub_category === sc).length
-              const active = subCategory === sc
-              return (
-                <button
-                  key={sc}
-                  onClick={() => setSubCategory(sc)}
-                  className={[
-                    'px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors flex items-center gap-1.5',
-                    active
-                      ? 'bg-[#1a6cbf] text-white'
-                      : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 border border-gray-200 dark:border-gray-700/60 hover:border-blue-300',
-                  ].join(' ')}
-                >
-                  {sc === 'all' ? 'All' : cap(sc)}
-                  <span className={[
-                    'inline-flex items-center justify-center min-w-4 h-4 px-1 rounded-full text-[10px] font-semibold',
-                    active ? 'bg-white/20 text-white' : 'bg-gray-100 dark:bg-gray-700/60 text-gray-500 dark:text-gray-400',
-                  ].join(' ')}>
-                    {count}
-                  </span>
-                </button>
-              )
-            })}
-          </div>
-        )}
       </div>
 
       {/* Stock table */}

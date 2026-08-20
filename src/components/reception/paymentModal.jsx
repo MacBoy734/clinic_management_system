@@ -40,7 +40,11 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
   )
   const remaining = payable - linesSum
 
-  const canWaive = stage === 1 && onWaive && visit?.visit_type === 'consultation'
+  // Stage 1: only consultation visits can waive
+  // Stage 2: any visit at billing can waive
+  const canWaive = onWaive && (
+    (stage === 1 && visit?.visit_type === 'consultation') || stage === 2
+  )
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape' && !loading) onClose() }
@@ -150,7 +154,7 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
 
-          {/* Mode toggle — stage 1 consultation only */}
+          {/* Mode toggle */}
           {canWaive && (
             <div className="flex rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden">
               <button
@@ -175,7 +179,7 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
                     : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20',
                 ].join(' ')}
               >
-                Waive Fee
+                {stage === 1 ? 'Waive Fee' : 'Waive Stage 2'}
               </button>
             </div>
           )}
@@ -186,14 +190,17 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
               <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 p-4">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-[13px] font-semibold text-amber-800 dark:text-amber-400">
-                    Waive Consultation Fee
+                    {stage === 1 ? 'Waive Consultation Fee' : 'Waive Stage 2 Fees'}
                   </p>
                   <span className="text-[15px] font-bold text-amber-800 dark:text-amber-400 tabular-nums">
                     {formatMoney(outstanding)}
                   </span>
                 </div>
                 <p className="text-[11px] text-amber-700 dark:text-amber-400/80">
-                  {visit?.patient_name} will be forwarded to the doctor without paying the consultation fee.
+                  {stage === 1
+                    ? `${visit?.patient_name} will be forwarded to the doctor without paying the consultation fee.`
+                    : `All Stage 2 fees (lab, medication, procedure) will be waived for ${visit?.patient_name}. The visit will be marked complete.`
+                  }
                 </p>
               </div>
 
@@ -403,7 +410,7 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
                   className="px-4 py-2 rounded-lg text-[13px] font-medium bg-amber-600 hover:bg-amber-700 text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="slash" size={14} />}
-                  Waive Fee
+                  {stage === 1 ? 'Waive Fee' : 'Waive Stage 2'}
                 </button>
               </div>
             </>

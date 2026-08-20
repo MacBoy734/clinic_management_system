@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import {
   SkeletonList, ErrorState, EmptyState, Card, Badge, Icon,
-  badgeClass, cap, formatTime, formatMoney, waitMinutes, VISIT_TYPES, PAYMENT_METHODS,
+  badgeClass, cap, formatTime, formatMoney, waitMinutes, VISIT_TYPES,
 } from '@/utils/helpers'
 import { PaymentModal } from '@/components/reception/paymentModal'
 import { registerVisitSchema } from '@/lib/validation'
@@ -29,10 +29,7 @@ function Field({ label, children }) {
   )
 }
 
-// ─── Lab test picker — direct_lab visits only ──────────────────────────────
-// Searchable, grouped-by-category multi-select over LabTestCatalog. Kept as
-// its own component since it has its own query + local search/filter state
-// that shouldn't re-run every time an unrelated form field changes.
+// ─── Lab test picker ───────────────────────────────────────────────────────────
 function LabTestPicker({ selectedTests, onToggle }) {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
@@ -40,12 +37,7 @@ function LabTestPicker({ selectedTests, onToggle }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ['lab-catalog'],
     queryFn: () => api.get('/api/lab/catalog'),
-    staleTime: 5 * 60 * 1000, // catalog rarely changes within a shift
-  })
-
-  const waiveMutation = useMutation({
-    mutationFn: ({ visitId, reason }) => api.patch(`/api/reception/visits/${visitId}/waive-stage1`, { reason }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reception'] }),
+    staleTime: 5 * 60 * 1000,
   })
 
   const allTests = data?.tests || []
@@ -57,7 +49,6 @@ function LabTestPicker({ selectedTests, onToggle }) {
     return matchesSearch && matchesCategory
   })
 
-  // Group filtered results by category for display
   const grouped = filtered.reduce((acc, t) => {
     const key = t.category || 'Other'
     if (!acc[key]) acc[key] = []
@@ -77,7 +68,6 @@ function LabTestPicker({ selectedTests, onToggle }) {
 
   return (
     <div className="rounded-xl border border-purple-100 dark:border-purple-800/40 bg-purple-50 dark:bg-purple-900/10 p-4 space-y-3">
-      {/* Search + category filter */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="relative flex-1 min-w-40">
           <Icon name="search" size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -100,7 +90,6 @@ function LabTestPicker({ selectedTests, onToggle }) {
         </select>
       </div>
 
-      {/* Selected chips */}
       {selectedTests.length > 0 && (
         <div className="flex items-center gap-1.5 flex-wrap pb-1">
           {selectedTests.map((t) => (
@@ -121,7 +110,6 @@ function LabTestPicker({ selectedTests, onToggle }) {
         </div>
       )}
 
-      {/* Grouped test list */}
       <div className="max-h-56 overflow-y-auto rounded-lg border border-purple-100 dark:border-purple-800/30 bg-white dark:bg-[#0f172a] divide-y divide-gray-100 dark:divide-gray-800">
         {Object.keys(grouped).length === 0 ? (
           <p className="text-[12px] text-gray-400 text-center py-4">No tests match your search.</p>
@@ -151,7 +139,6 @@ function LabTestPicker({ selectedTests, onToggle }) {
         )}
       </div>
 
-      {/* Total */}
       <div className="flex items-center justify-between px-1 pt-1 border-t border-purple-100 dark:border-purple-800/30">
         <span className="text-[11px] text-gray-500 dark:text-gray-400">
           {selectedTests.length} test{selectedTests.length === 1 ? '' : 's'} selected
@@ -214,7 +201,6 @@ function RegisterModal({ onClose }) {
       return toast.error(message)
     }
 
-    // Validated & coerced payload
     registerMut.mutate(result.data)
   }
 
@@ -229,7 +215,8 @@ function RegisterModal({ onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      {/* Backdrop click disabled to prevent accidental data loss */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
 
       <div className="relative w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white dark:bg-[#0f172a] rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700">
 
@@ -265,7 +252,6 @@ function RegisterModal({ onClose }) {
               ))}
             </div>
 
-            {/* Fee waived notice */}
             {visitType !== 'consultation' && (
               <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2.5">
                 <span className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5">⚠</span>
@@ -388,36 +374,50 @@ export default function QueueTab() {
   const [paying, setPaying] = useState(null)
   const [showRegister, setShowRegister] = useState(false)
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['reception', 'visits', filter],
     queryFn: () => api.get(`/api/reception/queue${filter !== 'all' ? `?status=${filter}` : ''}`),
-    staleTime: Infinity,
-    refetchOnWindowFocus: false,
-    refetchOnReconnect: false,
+    staleTime: 30_000,
+    refetchInterval: 15_000,
+    refetchOnWindowFocus: true,
   })
 
+  // Uses /api/reception/payments — accepts { visit_id, stage, payments[], discount_amount, discount_reason }
   const payMutation = useMutation({
-    mutationFn: ({ visitId, stage, ...body }) =>
-      api.patch(`/api/reception/visits/${visitId}/stage${stage}-payment`, body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['reception'] }),
+    mutationFn: (body) => api.patch('/api/reception/payments', body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['reception'] })
+      toast.success('Payment collected — moved to consultation')
+      setPaying(null)
+    },
+    onError: (err) => toast.error(err.message || 'Payment failed'),
+  })
+
+  const waiveMutation = useMutation({
+    mutationFn: ({ visitId, reason }) =>
+      api.patch(`/api/reception/visits/${visitId}/waive`, { stage: 1, reason }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['reception'] })
+      toast.success('Fee waived — forwarded to doctor')
+      setPaying(null)
+    },
+    onError: (err) =>
+      toast.error(err?.response?.data?.error || err?.message || 'Could not waive fee'),
   })
 
   const visits = data ?? []
 
-  const handlePay = async (visit, method, reference) => {
-    try {
-      await payMutation.mutateAsync({
-        visitId: visit.id,
-        amount: visit.bill?.consultation_fee || 500,
-        method,
-        reference,
-        stage: 1,
-      })
-      toast.success(`Payment collected — moved to consultation`)
-      setPaying(null)
-    } catch (err) {
-      toast.error(err.message || 'Payment failed')
+  // PaymentModal sends { payments: [...], discount_amount, discount_reason }
+  const handlePay = (payload) => {
+    if (!paying?.id) {
+      toast.error('Visit ID missing — cannot process payment')
+      return
     }
+    payMutation.mutate({
+      visit_id: paying.id,
+      stage: 1,
+      ...payload,
+    })
   }
 
   if (isLoading) return <SkeletonList items={6} />
@@ -426,7 +426,7 @@ export default function QueueTab() {
   return (
     <div className="space-y-4">
 
-      {/* Toolbar */}
+            {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {/* Filter pills */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -443,15 +443,32 @@ export default function QueueTab() {
           ))}
         </div>
 
-        {/* Register button */}
-        <button
-          onClick={() => setShowRegister(true)}
-          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1a6cbf] hover:bg-[#155a9f] text-white text-[13px] font-semibold transition-colors shrink-0">
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          Register Patient
-        </button>
+        {/* Count + Refresh + Register */}
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {visits.length} patient{visits.length !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button
+            onClick={() => setShowRegister(true)}
+            className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#1a6cbf] hover:bg-[#155a9f] text-white text-[13px] font-semibold transition-colors shrink-0">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            Register Patient
+          </button>
+        </div>
       </div>
 
       {/* Queue list */}
@@ -494,7 +511,10 @@ export default function QueueTab() {
                       )}
                     </div>
                     <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1 truncate">
-                      {v.doctor && <span>· {v.doctor}</span>}
+                      {/* Fixed: handles both raw Prisma object and shaped string */}
+                      {v.doctor && (
+                        <span>· {typeof v.doctor === 'string' ? v.doctor : v.doctor?.username}</span>
+                      )}
                       {v.referred_by && <span className="ml-2">· referred by {v.referred_by}</span>}
                     </p>
                   </div>
@@ -540,20 +560,19 @@ export default function QueueTab() {
       {paying && (
         <PaymentModal
           visit={paying}
+          stage={1}
           title="Collect Stage 1 Payment"
           description="Consultation fee — paid upfront before seeing the doctor"
           amount={paying.bill?.consultation_fee || 500}
-          loading={payMutation.isPending}
+          loading={payMutation.isPending || waiveMutation.isPending}
           onClose={() => setPaying(null)}
           onConfirm={handlePay}
-          onWaive={async ({ reason }) => {
-            try {
-              await waiveMutation.mutateAsync({ visitId: paying.id, reason })
-              toast.success(`Consultation fee waived — ${paying.patient?.name} forwarded to doctor`)
-              setPaying(null)
-            } catch (err) {
-              toast.error(err?.response?.data?.error || err?.message || 'Could not waive fee')
+          onWaive={({ reason }) => {
+            if (!paying?.id) {
+              toast.error('Visit ID missing')
+              return
             }
+            waiveMutation.mutate({ visitId: paying.id, reason })
           }}
         />
       )}

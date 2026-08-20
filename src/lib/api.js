@@ -1,4 +1,7 @@
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000'
+// Use relative URLs — Next.js proxies /api/* to Express internally.
+// Leave this empty so requests go to http://192.168.1.50:3000/api/...
+const BASE_URL = ''
+
 import { useAuthStore } from '@/store/authStore'
 
 async function request(path, options = {}) {
@@ -7,28 +10,26 @@ async function request(path, options = {}) {
     credentials: 'include',
     ...options,
   })
-
   if (res.status === 401 && typeof window !== 'undefined') {
     useAuthStore.getState().logout()
     window.location.href = '/'
     throw new Error('Session expired')
   }
-
+  
   const data = await res.json().catch(() => null)
-
   if (!res.ok) {
-    throw new Error(data?.message || `Request failed (${res.status})`)
+    throw new Error(data?.error || data?.message || `Request failed (${res.status})`)
   }
 
   return data
 }
 
 const api = {
-  get:    (path)       => request(path),
-  post:   (path, body) => request(path, { method: 'POST',   body: JSON.stringify(body) }),
-  put:    (path, body) => request(path, { method: 'PUT',    body: JSON.stringify(body) }),
-  patch:  (path, body) => request(path, { method: 'PATCH',  body: JSON.stringify(body) }),
-  delete: (path)       => request(path, { method: 'DELETE' }),
+  get: (path) => request(path),
+  post: (path, body) => request(path, { method: 'POST', body: JSON.stringify(body) }),
+  put: (path, body) => request(path, { method: 'PUT', body: JSON.stringify(body) }),
+  patch: (path, body) => request(path, { method: 'PATCH', body: JSON.stringify(body) }),
+  delete: (path) => request(path, { method: 'DELETE' }),
 }
 
 export default api

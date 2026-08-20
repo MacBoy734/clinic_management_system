@@ -113,6 +113,26 @@ export default function OverviewTab() {
 
   return (
     <div className="space-y-4">
+      {/* ── Page header ── */}
+      <div className="flex items-start justify-between">
+        <div>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+            Dashboard Overview
+          </h2>
+        </div>
+        <button
+          onClick={() => q.refetch()}
+          disabled={q.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon
+            name="refresh"
+            size={13}
+            className={q.isFetching ? 'animate-spin' : ''}
+          />
+          {q.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
       {/* KPI cards (4) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="p-4">

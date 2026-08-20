@@ -182,6 +182,11 @@ export default function ReceptionExpensesPage() {
   const statsQuery = useExpenseStats(period)
   const saveMutation = useSaveExpense()
   const deleteMutation = useDeleteExpense()
+  const isRefetching = expensesQuery.isFetching || statsQuery.isFetching
+  const refetchAll = () => {
+    expensesQuery.refetch()
+    statsQuery.refetch()
+  }
 
   const expenses = expensesQuery.data?.expenses ?? []
   const total = expensesQuery.data?.total ?? 0
@@ -223,8 +228,8 @@ export default function ReceptionExpensesPage() {
           {PERIODS.map((p) => (
             <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1) }}
               className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${period === p.key
-                  ? 'bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                ? 'bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 shadow-sm'
+                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}>
               {p.label}
             </button>
@@ -283,6 +288,16 @@ export default function ReceptionExpensesPage() {
               className="pl-8 pr-4 py-1.5 text-[12px] border border-gray-200 dark:border-gray-600 rounded-lg w-48 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-colors"
             />
           </div>
+          <button
+            onClick={() => refetchAll()}
+            disabled={isRefetching}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 hover:border-blue-300 dark:hover:border-blue-600 font-medium transition-colors disabled:opacity-60"
+          >
+            <svg className={`w-3.5 h-3.5 ${isRefetching ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {isRefetching ? 'Refreshing…' : 'Refresh'}
+          </button>
           <button
             onClick={() => setExpenseModal('new')}
             className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] rounded-lg bg-[#1a6cbf] hover:bg-[#155fa0] text-white font-medium transition-colors">

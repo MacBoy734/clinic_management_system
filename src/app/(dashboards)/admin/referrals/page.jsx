@@ -19,7 +19,7 @@ export default function ReferralsTab() {
   const user = useAuthStore((s) => s.user)
   const [paying, setPaying] = useState(null) // referral being confirmed for payment
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['admin', 'referrals'],
     queryFn: () => api.get('/api/admin/referrals'),
     refetchInterval: 30000,
@@ -71,8 +71,30 @@ export default function ReferralsTab() {
   }
   if (error) return <ErrorState message={error.message} onRetry={refetch} />
 
-  return (
+   return (
     <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-[16px] font-bold text-gray-900 dark:text-gray-100">Referrals</h2>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {referrals.length} pending
+          </span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+
       {/* Compact stat row */}
       <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <Card className="p-4">

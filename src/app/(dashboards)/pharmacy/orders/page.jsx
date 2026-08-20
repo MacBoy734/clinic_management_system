@@ -52,30 +52,30 @@ export default function InternalOrdersTab() {
   const [fulfilling, setFulfilling] = useState(null)
   const [cancelling, setCancelling] = useState(null)
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ['pharmacy', 'orders'],
     queryFn: () => api.get('/api/pharmacy/orders'),
     refetchInterval: 30000,
     staleTime: 15000,
   })
-  
+
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['pharmacy', 'orders'] })
     // Stock moved — the inventory table and the counter search are stale.
     queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
     queryClient.invalidateQueries({ queryKey: ['pharmacy', 'products'] })
   }
-  
-        useEffect(() => {
-      socket.on('order:new', () => invalidate())
-      socket.on('prescription:returned', () => invalidate())
-  
-      return () => {
-        socket.off('prescription:new')
-        socket.off('prescription:returned')
-      }
-    }, [queryClient])
-  
+
+  useEffect(() => {
+    socket.on('order:new', () => invalidate())
+    socket.on('prescription:returned', () => invalidate())
+
+    return () => {
+      socket.off('prescription:new')
+      socket.off('prescription:returned')
+    }
+  }, [queryClient])
+
   const fulfillMutation = useMutation({
     mutationFn: ({ id, lines }) => api.patch(`/api/pharmacy/orders/${id}/fulfill`, { lines }),
     onSuccess: invalidate,
@@ -172,9 +172,15 @@ export default function InternalOrdersTab() {
         </div>
         <button
           onClick={() => refetch()}
-          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5"
+          disabled={isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
         >
-          <Icon name="refresh" size={13} /> Refresh
+          <Icon
+            name="refresh"
+            size={13}
+            className={isFetching ? 'animate-spin' : ''}
+          />
+          {isFetching ? 'Refreshing…' : 'Refresh'}
         </button>
       </div>
 

@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import { expenseFormSchema } from '@/lib/validation'
 import toast from 'react-hot-toast'
+import { Icon } from '@/utils/helpers'
 
 const DOMAIN = 'clinic'
 
@@ -231,16 +232,30 @@ export default function ReceptionExpensesPage() {
             Track day-to-day clinic running costs
           </p>
         </div>
-        <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1">
-          {PERIODS.map((p) => (
-            <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1) }}
-              className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${period === p.key
-                  ? 'bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 shadow-sm'
-                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-                }`}>
-              {p.label}
-            </button>
-          ))}
+        <div className="flex items-center gap-2">
+          <div className="flex gap-1 bg-gray-100 dark:bg-gray-800 rounded-xl p-1">
+            {PERIODS.map((p) => (
+              <button key={p.key} onClick={() => { setPeriod(p.key); setPage(1) }}
+                className={`px-3 py-1.5 rounded-lg text-[12px] font-medium transition-all ${period === p.key
+                    ? 'bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 shadow-sm'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                  }`}>
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={() => expensesQuery.refetch()}
+            disabled={expensesQuery.isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={expensesQuery.isFetching ? 'animate-spin' : ''} 
+            />
+            {expensesQuery.isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       </div>
 

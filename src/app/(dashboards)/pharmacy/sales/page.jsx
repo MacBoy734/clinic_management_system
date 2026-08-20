@@ -91,6 +91,8 @@ export default function OTCSalesTab() {
     staleTime: 15000,
   })
 
+    const isRefetching = salesQuery.isFetching
+
   const createSaleMutation = useMutation({
     mutationFn: (payload) => api.post('/api/pharmacy/otc-sales', payload),
     onSuccess: () => {
@@ -157,19 +159,33 @@ export default function OTCSalesTab() {
           value={stats.total_sales} sublabel="transactions" />
       </div>
 
-      <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Recent Sales</h3>
           <p className="text-[11px] text-gray-500 dark:text-gray-400">
             Walk-in sales — medications, consumables and general goods
           </p>
         </div>
-        <button
-          onClick={() => setShowNewSale(true)}
-          className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
-        >
-          <Icon name="plus" size={14} /> New Sale
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => salesQuery.refetch()}
+            disabled={isRefetching}
+            className="px-3 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isRefetching ? 'animate-spin' : ''} 
+            />
+            {isRefetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button
+            onClick={() => setShowNewSale(true)}
+            className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
+          >
+            <Icon name="plus" size={14} /> New Sale
+          </button>
+        </div>
       </div>
 
       {!sales.length ? (

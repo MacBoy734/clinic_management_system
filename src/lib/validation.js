@@ -345,8 +345,9 @@ export const collectPaymentSchema = z.object({
 }).refine((data) => !(data.discount_amount > 0 && !data.discount_reason), { message: 'A reason is required when applying a discount' })
   .refine((data) => !(data.stage === 1 && data.discount_amount > 0), { message: 'Discounts are only allowed at stage 2' })
 
-export const waiveStage1Schema = z.object({
-  reason: z.string().trim().min(1, 'A reason is required'),
+export const waivePaymentSchema = z.object({
+  stage: z.literal(1).or(z.literal(2)),
+  reason: z.string().trim().min(3, 'Reason must be at least 3 characters'),
 })
 
 export const updateBalanceSchema = z.object({
@@ -378,16 +379,16 @@ export const paymentModalSchema = z.object({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export const prescriptionItemSchema = z.object({
-  medication: z.string().trim().max(200).optional(),
-  product_id: IdParam.optional(),
-  drug_id: IdParam.optional(),
+  medication: z.string().trim().min(1, 'Medication name required').max(200),
+  product_id: IdParam,
+  drug_id: IdParam,
   dosage: z.string().trim().max(100).default(''),
   frequency: z.string().trim().max(100).default(''),
   duration: z.string().trim().max(100).default(''),
   quantity: PositiveQuantity,
-  unit_cost: Money.default(0),
-  form: z.enum(['oral', 'injection']).default('oral'),
-}).refine((data) => data.product_id || data.medication, { message: 'Each line needs a medication name or product' })
+  unit_cost: Money.refine((v) => v >= 1, 'Unit price must be at least 1'),
+  form: z.string().trim().max(100).optional(),
+})
 
 export const createPrescriptionSchema = z.object({
   items: z.array(prescriptionItemSchema).min(1, 'Add at least one medication'),
@@ -463,7 +464,6 @@ export const createRestockRequestSchema = z.object({
   product_id: IdParam.optional(),
   drug_stock_id: IdParam.optional(),
   quantity: PositiveQuantity,
-  batch_number: NullableString,
   expiry_date: FutureDate.nullable().optional(),
   notes: NullableString,
 }).refine((data) => data.product_id || data.drug_stock_id, { message: 'product_id or drug_stock_id is required' })

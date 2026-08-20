@@ -27,44 +27,45 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import socket from '@/lib/socket'
 import { useAuthStore } from '@/store/authStore'
+import { Icon } from '@/utils/helpers'
 
 // ─── Shared config (mirrors dashboardLayout) ──────────────────────────────────
 
 const NOTIF_TYPE_CONFIG = {
-  'patient:new':      { dot: 'bg-blue-400',    label: 'New patient',       bg: 'bg-blue-50   dark:bg-blue-900/10'   },
-  'visit:forwarded':  { dot: 'bg-indigo-400',  label: 'Visit forwarded',   bg: 'bg-indigo-50 dark:bg-indigo-900/10' },
-  'visit:completed':  { dot: 'bg-emerald-400', label: 'Visit completed',   bg: 'bg-emerald-50 dark:bg-emerald-900/10' },
-  'lab:results_ready':{ dot: 'bg-purple-400',  label: 'Lab ready',         bg: 'bg-purple-50 dark:bg-purple-900/10' },
-  'lab:request_new':  { dot: 'bg-violet-400',  label: 'Lab requested',     bg: 'bg-violet-50 dark:bg-violet-900/10' },
-  'rx:new':           { dot: 'bg-teal-400',    label: 'New prescription',  bg: 'bg-teal-50   dark:bg-teal-900/10'   },
-  'rx:dispensed':     { dot: 'bg-cyan-400',    label: 'Rx dispensed',      bg: 'bg-cyan-50   dark:bg-cyan-900/10'   },
-  'rx:returned':      { dot: 'bg-orange-400',  label: 'Rx returned',       bg: 'bg-orange-50 dark:bg-orange-900/10' },
-  'rx:cancelled':     { dot: 'bg-red-400',     label: 'Rx cancelled',      bg: 'bg-red-50    dark:bg-red-900/10'    },
-  'payment:received': { dot: 'bg-emerald-400', label: 'Payment received',  bg: 'bg-emerald-50 dark:bg-emerald-900/10' },
-  'stock:low':        { dot: 'bg-amber-400',   label: 'Low stock',         bg: 'bg-amber-50  dark:bg-amber-900/10'  },
-  'stock:out':        { dot: 'bg-red-500',     label: 'Out of stock',      bg: 'bg-red-50    dark:bg-red-900/10'    },
+  'patient:new': { dot: 'bg-blue-400', label: 'New patient', bg: 'bg-blue-50   dark:bg-blue-900/10' },
+  'visit:forwarded': { dot: 'bg-indigo-400', label: 'Visit forwarded', bg: 'bg-indigo-50 dark:bg-indigo-900/10' },
+  'visit:completed': { dot: 'bg-emerald-400', label: 'Visit completed', bg: 'bg-emerald-50 dark:bg-emerald-900/10' },
+  'lab:results_ready': { dot: 'bg-purple-400', label: 'Lab ready', bg: 'bg-purple-50 dark:bg-purple-900/10' },
+  'lab:request_new': { dot: 'bg-violet-400', label: 'Lab requested', bg: 'bg-violet-50 dark:bg-violet-900/10' },
+  'rx:new': { dot: 'bg-teal-400', label: 'New prescription', bg: 'bg-teal-50   dark:bg-teal-900/10' },
+  'rx:dispensed': { dot: 'bg-cyan-400', label: 'Rx dispensed', bg: 'bg-cyan-50   dark:bg-cyan-900/10' },
+  'rx:returned': { dot: 'bg-orange-400', label: 'Rx returned', bg: 'bg-orange-50 dark:bg-orange-900/10' },
+  'rx:cancelled': { dot: 'bg-red-400', label: 'Rx cancelled', bg: 'bg-red-50    dark:bg-red-900/10' },
+  'payment:received': { dot: 'bg-emerald-400', label: 'Payment received', bg: 'bg-emerald-50 dark:bg-emerald-900/10' },
+  'stock:low': { dot: 'bg-amber-400', label: 'Low stock', bg: 'bg-amber-50  dark:bg-amber-900/10' },
+  'stock:out': { dot: 'bg-red-500', label: 'Out of stock', bg: 'bg-red-50    dark:bg-red-900/10' },
 }
 const DEFAULT_CONFIG = { dot: 'bg-gray-300', label: 'Notification', bg: 'bg-gray-50 dark:bg-gray-800/40' }
 
 // ─── Time window options ──────────────────────────────────────────────────────
 
 const TIME_OPTIONS = [
-  { label: 'Last 24 hrs', value: 24    },
-  { label: 'Last 7 days', value: 168   },
-  { label: 'Last 30 days',value: 720   },
-  { label: 'All time',    value: 0     },
+  { label: 'Last 24 hrs', value: 24 },
+  { label: 'Last 7 days', value: 168 },
+  { label: 'Last 30 days', value: 720 },
+  { label: 'All time', value: 0 },
 ]
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function timeAgo(date) {
   const diff = Math.floor((Date.now() - new Date(date)) / 1000)
-  if (diff < 60)    return `${diff}s ago`
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`
+  if (diff < 60) return `${diff}s ago`
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`
   const days = Math.floor(diff / 86400)
-  if (days === 1)   return 'Yesterday'
-  if (days < 7)     return `${days} days ago`
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days} days ago`
   return new Date(date).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 
@@ -153,24 +154,24 @@ function NotifSkeleton() {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function NotificationsTab({ title = 'Notifications' }) {
-  const qc   = useQueryClient()
+  const qc = useQueryClient()
   const user = useAuthStore((s) => s.user)
 
-  const [page,       setPage]       = useState(1)
-  const [hours,      setHours]      = useState(24)
+  const [page, setPage] = useState(1)
+  const [hours, setHours] = useState(24)
   const [typeFilter, setTypeFilter] = useState('all')
 
   // Reset to page 1 whenever filters change
   useEffect(() => { setPage(1) }, [hours, typeFilter])
 
   // ── Query ──────────────────────────────────────────────────────────────────
-  const { data, isLoading, isFetching, isError, error } = useQuery({
+  const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: ['notifications', 'full', page, hours, typeFilter],
-    queryFn:  () => {
+    queryFn: () => {
       const params = new URLSearchParams({
-        page:     String(page),
+        page: String(page),
         per_page: '20',
-        hours:    String(hours),
+        hours: String(hours),
       })
       return api.get(`/api/notifications?${params}`)
     },
@@ -192,9 +193,9 @@ export default function NotificationsTab({ title = 'Notifications' }) {
   }, [qc])
 
   // ── Data ───────────────────────────────────────────────────────────────────
-  const allNotifications = data?.notifications    ?? []
-  const pagination       = data?.pagination       ?? {}
-  const unreadCount      = data?.unread_count     ?? 0
+  const allNotifications = data?.notifications ?? []
+  const pagination = data?.pagination ?? {}
+  const unreadCount = data?.unread_count ?? 0
 
   // Client-side type filter (API filters by visibility/time, type filtering
   // done on the returned set — avoids adding another query param to the backend)
@@ -223,10 +224,23 @@ export default function NotificationsTab({ title = 'Notifications' }) {
           </p>
         </div>
 
-        {/* Live indicator */}
-        <div className="flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          Live · updates automatically
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon
+              name="refresh"
+              size={13}
+              className={isFetching ? 'animate-spin' : ''}
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <div className="flex items-center gap-1.5 text-[11px] text-gray-400 dark:text-gray-500">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Live
+          </div>
         </div>
       </div>
 
@@ -318,8 +332,8 @@ export default function NotificationsTab({ title = 'Notifications' }) {
             {typeFilter !== 'all'
               ? 'Try clearing the type filter or expanding the time window'
               : hours === 24
-              ? 'Try expanding the time window to see older notifications'
-              : 'Nothing here yet'}
+                ? 'Try expanding the time window to see older notifications'
+                : 'Nothing here yet'}
           </p>
           {typeFilter !== 'all' && (
             <button

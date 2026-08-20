@@ -270,7 +270,23 @@ function FinanceOverviewCard() {
       <CardHeader
         title="Finance Overview"
         subtitle="Real money in vs real money out"
-        action={<DateRangeFilter value={range} onChange={setRange} />}
+                action={
+          <div className="flex items-center gap-2 flex-wrap">
+            <DateRangeFilter value={range} onChange={setRange} />
+            <button
+              onClick={() => q.refetch()}
+              disabled={q.isFetching}
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+            >
+              <Icon 
+                name="refresh" 
+                size={13} 
+                className={q.isFetching ? 'animate-spin' : ''} 
+              />
+              {q.isFetching ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        }
       />
       {q.isLoading ? (
         <FinanceOverviewSkeleton />
@@ -574,7 +590,23 @@ function OutstandingBalancesCard() {
       <CardHeader
         title="Outstanding Balances"
         subtitle="Clinic bills & pharmacy credit — collect or waive"
-        action={<DateRangeFilter value={range} onChange={setRange} />}
+                action={
+          <div className="flex items-center gap-2 flex-wrap">
+            <DateRangeFilter value={range} onChange={setRange} />
+            <button
+              onClick={() => q.refetch()}
+              disabled={q.isFetching}
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+            >
+              <Icon 
+                name="refresh" 
+                size={13} 
+                className={q.isFetching ? 'animate-spin' : ''} 
+              />
+              {q.isFetching ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+        }
       />
       {q.isLoading ? (
         <SkeletonTable rows={5} cols={6} />
@@ -929,7 +961,23 @@ function BillingSubTab() {
         <CardHeader
           title="All Bills"
           subtitle={`${q.data?.total || bills.length} bill${q.data?.total === 1 ? '' : 's'}`}
-          action={<DateRangeFilter value={range} onChange={setRange} />}
+                    action={
+            <div className="flex items-center gap-2 flex-wrap">
+              <DateRangeFilter value={range} onChange={setRange} />
+              <button
+                onClick={() => q.refetch()}
+                disabled={q.isFetching}
+                className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+              >
+                <Icon 
+                  name="refresh" 
+                  size={13} 
+                  className={q.isFetching ? 'animate-spin' : ''} 
+                />
+                {q.isFetching ? 'Refreshing…' : 'Refresh'}
+              </button>
+            </div>
+          }
         />
         {bills.length === 0 ? (
           <EmptyState icon="receipt" title="No bills" description="Billable visits will appear here." />
@@ -1161,9 +1209,21 @@ function DepartmentExpensesCard({ department, title, icon, color }) {
       <CardHeader
         title={title}
         subtitle={`${q.data?.total || expenses.length} record${q.data?.total === 1 ? '' : 's'} &middot; ${formatMoney(total)} total`}
-        action={
+          action={
           <div className="flex items-center gap-2 flex-wrap">
             <DateRangeFilter value={range} onChange={setRange} />
+            <button
+              onClick={() => q.refetch()}
+              disabled={q.isFetching}
+              className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+            >
+              <Icon 
+                name="refresh" 
+                size={13} 
+                className={q.isFetching ? 'animate-spin' : ''} 
+              />
+              {q.isFetching ? 'Refreshing…' : 'Refresh'}
+            </button>
             <button
               onClick={() => setShowModal(true)}
               className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white inline-flex items-center gap-1.5 shrink-0"

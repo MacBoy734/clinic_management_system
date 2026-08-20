@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
-import { Icon, formatDate, formatTime, formatMoney, cap, Spinner} from '@/utils/helpers'
+import { Icon, formatDate, formatTime, formatMoney, cap, Spinner } from '@/utils/helpers'
 
 export function ReceiptModal({ bill, onClose }) {
   const [printing, setPrinting] = useState(false)
@@ -28,13 +28,19 @@ export function ReceiptModal({ bill, onClose }) {
     setTimeout(() => window.print(), 50)
   }
 
-  const total = bill.total_amount || 0
+  // ── Use backend-computed values ─────────────────────────────────
+  const total = bill.effective_total ?? bill.total_amount ?? 0
   const discount = bill.discount_amount || 0
-  const payable = Math.max(0, total - discount)
+  const payable = bill.payable_amount ?? Math.max(0, total - discount)
   const paid = bill.paid_amount || 0
   const balance = Math.max(0, payable - paid)
 
-  const isPaid = paid >= payable && payable >= 0
+  // PAID = money actually changed hands
+  const isPaid = (bill.status === 'paid' || bill.fee_status === 'paid') && paid > 0
+  // WAIVED = nothing to pay (all fees waived)
+  const isWaived = bill.status === 'waived' || bill.fee_status === 'waived'
+  // PARTIAL = some paid, some waived (e.g. consultation paid, stage 2 waived)
+  const isPartial = paid > 0 && (bill.stage2_status === 'waived' || bill.consultation_fee_status === 'waived')
 
   const payments = bill.payments || []
   const items = bill.items || []
@@ -119,12 +125,12 @@ export function ReceiptModal({ bill, onClose }) {
                           <td className="py-1.5 pr-3 text-gray-800">
                             {item.name}
                             {waived && (
-                              <span className="ml-1.5 text-[10px] font-medium text-amber-600 dark:text-amber-500">(Waived)</span>
+                              <span className="ml-1.5 text-[10px] font-medium text-amber-600">(Waived)</span>
                             )}
                           </td>
                           <td className="py-1.5 pl-3 text-right tabular-nums">
                             {waived ? (
-                              <span className="text-amber-600 dark:text-amber-500 font-medium text-[11px]">Waived</span>
+                              <span className="text-amber-600 font-medium text-[11px]">Waived</span>
                             ) : (
                               <span className="text-gray-800">{formatMoney(item.amount || 0)}</span>
                             )}
@@ -172,6 +178,26 @@ export function ReceiptModal({ bill, onClose }) {
                   ) : (<p className="text-[11px] text-gray-400 italic">No payments recorded</p>)}
                 </div>
 
+                {/* Waiver audit trail */}
+                {(bill.consultation_fee_waive_reason || bill.stage2_waive_reason) && (
+                  <div className="mb-4 space-y-1">
+                    {bill.consultation_fee_waive_reason && (
+                      <div className="px-2 py-1.5 rounded bg-amber-50 border border-amber-200">
+                        <p className="text-[11px] text-amber-700 font-medium">
+                          Consultation fee waived by {bill.consultation_fee_waived_by || 'staff'} — {bill.consultation_fee_waive_reason}
+                        </p>
+                      </div>
+                    )}
+                    {bill.stage2_waive_reason && (
+                      <div className="px-2 py-1.5 rounded bg-amber-50 border border-amber-200">
+                        <p className="text-[11px] text-amber-700 font-medium">
+                          Stage 2 fees waived by {bill.stage2_waived_by || 'staff'} — {bill.stage2_waive_reason}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Summary */}
                 <div className="grid grid-cols-2 gap-2 text-[12px] mb-4 pt-2 border-t border-gray-200">
                   <div className="flex justify-between px-2 py-1 rounded bg-emerald-50">
@@ -191,11 +217,25 @@ export function ReceiptModal({ bill, onClose }) {
                   )}
                 </div>
 
-                {/* PAID stamp */}
+                {/* Stamps */}
                 {isPaid && (
                   <div className="flex justify-center my-4">
                     <div className="border-4 border-emerald-600 rounded-lg px-6 py-2 transform -rotate-3">
                       <p className="text-[18px] font-bold text-emerald-600 tracking-widest">PAID</p>
+                    </div>
+                  </div>
+                )}
+                {isWaived && (
+                  <div className="flex justify-center my-4">
+                    <div className="border-4 border-amber-500 rounded-lg px-6 py-2 transform -rotate-3">
+                      <p className="text-[18px] font-bold text-amber-500 tracking-widest">WAIVED</p>
+                    </div>
+                  </div>
+                )}
+                {isPartial && !isWaived && (
+                  <div className="flex justify-center my-4">
+                    <div className="border-4 border-blue-500 rounded-lg px-6 py-2 transform -rotate-3">
+                      <p className="text-[18px] font-bold text-blue-500 tracking-widest">PARTIALLY PAID</p>
                     </div>
                   </div>
                 )}
@@ -205,8 +245,8 @@ export function ReceiptModal({ bill, onClose }) {
                   <div>
                     <p className="text-[11px] text-gray-500 mb-5">Received by</p>
                     <div className="border-t border-gray-400 pt-1 min-w-45">
-                      <p className="text-[12px] font-semibold text-gray-900">Receptionist</p>
-                      <p className="text-[10px] text-gray-500">{clinic.name || 'City Health Clinic'}</p>
+                      <p className="text-[12px] font-semibold text-gray-900">you were served by: {bill.cashier}</p>
+                      <p className="text-[10px] text-gray-500">{clinic.name || 'Kitui Health diagnostic center'}</p>
                     </div>
                   </div>
                   <p className="text-[9px] text-gray-400 text-right max-w-50">This is a computer-generated receipt. Retain for your records.</p>

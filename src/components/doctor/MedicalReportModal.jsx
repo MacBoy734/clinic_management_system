@@ -1,22 +1,5 @@
 'use client'
 
-// MedicalReportModal — printable medical report for a full consultation.
-// Sibling of the lab ReportModal: same Kitui Royal letterhead, same running
-// header/footer table strategy, same pagination discipline. Save as
-// components/doctor/MedicalReportModal.jsx — named export matches the
-// consultation page's import.
-//
-// DATA: no new backend endpoint. Fetches the three existing consultation
-// queries (visit, labs, prescriptions) with the SAME queryKeys the page
-// uses, so opening the modal is a cache hit and renders instantly.
-//
-// PRINT STRATEGY (proven in the lab ReportModal):
-//   - portaled to <body>; body > *:not(.medical-report-overlay) hidden
-//   - <thead> letterhead + <tfoot> motto repeat on every printed page
-//   - blocks split BETWEEN rows, never through one; no orphaned headers
-//
-// REQUIRED ASSET: /public/clinic-logo.png — degrades gracefully if missing.
-
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -24,11 +7,12 @@ import api from '@/lib/api'
 import { Icon, formatDate, formatTime, cap, Spinner } from '@/utils/helpers'
 import { evaluateField } from '@/utils/labResult'
 
-// Letterhead — identical to the lab report so the two documents read as a set.
-const LETTERHEAD = {
+// Fallbacks used only when clinic settings haven't loaded or a field is missing.
+const FALLBACK = {
   name: 'The Kitui Royal Diagnostic Centre',
   services: 'Lab Services, General Outpatient Services, Specialised Clinic, Ultra Sound Services.',
   email: 'thekituiroyaldiagnosticcentre@gmail.com',
+  address: 'Kitui Town, Kitui County, Kenya',
   tel: '0721532841 / 0114367561',
   motto: 'We Listen, We Care; your Health is our Concern',
   logo: '/clinic-logo.png',
@@ -42,8 +26,8 @@ const GREEN = '#2e9e3e'
 const RX_EXCLUDED = ['declined', 'returned', 'restocked', 'cancelled']
 
 const FLAG_CLASS = {
-  low:      'font-bold text-amber-600',
-  high:     'font-bold text-red-700',
+  low: 'font-bold text-amber-600',
+  high: 'font-bold text-red-700',
   abnormal: 'font-bold text-red-700',
 }
 
@@ -77,6 +61,24 @@ export function MedicalReportModal({ visitId, onClose }) {
     enabled: !!visitId,
     staleTime: 15000,
   })
+  const clinicQuery = useQuery({
+    queryKey: ['admin', 'settings', 'receipt'],
+    queryFn: () => api.get('/api/admin/settings'),
+    staleTime: 300000,
+  })
+
+  const clinic = clinicQuery.data?.settings || {}
+
+  // Letterhead built from fetched clinic settings with hardcoded fallbacks.
+  const letterhead = {
+    name: clinic.name || FALLBACK.name,
+    services: clinic.services || FALLBACK.services,
+    email: clinic.email || FALLBACK.email,
+    tel: clinic.phone || FALLBACK.tel,
+    address: clinic.address || FALLBACK.address,
+    logo: FALLBACK.logo,
+  }
+  const motto = clinic.tagline || FALLBACK.motto
 
   const visit = visitQuery.data?.visit
   const labRequests = labsQuery.data?.requests || []
@@ -272,7 +274,7 @@ export function MedicalReportModal({ visitId, onClose }) {
                       />
                       <div className="text-center pt-3 px-8">
                         <img
-                          src={LETTERHEAD.logo}
+                          src={letterhead.logo}
                           alt=""
                           className="h-16 mx-auto mb-1"
                           onError={(e) => { e.currentTarget.style.display = 'none' }}
@@ -281,15 +283,15 @@ export function MedicalReportModal({ visitId, onClose }) {
                           className="text-[26px] leading-tight font-extrabold"
                           style={{ color: BLUE, fontFamily: 'Georgia, "Times New Roman", serif' }}
                         >
-                          {LETTERHEAD.name}
+                          {letterhead.name}
                         </h1>
                         <p className="text-[12px] font-bold mt-0.5" style={{ color: GREEN }}>
-                          {LETTERHEAD.services}
+                          {letterhead.services}
                         </p>
                         <p className="text-[12px] mt-0.5 text-gray-900">
                           <span className="font-semibold italic" style={{ color: BLUE }}>Email: </span>
-                          <span className="italic" style={{ color: BLUE }}>{LETTERHEAD.email}</span>
-                          <span className="font-bold ml-4">Tel: {LETTERHEAD.tel}</span>
+                          <span className="italic" style={{ color: BLUE }}>{letterhead.email}</span>
+                          <span className="font-bold ml-4">Tel: {letterhead.tel}</span>
                         </p>
                       </div>
                       <div className="mt-2 mx-6" style={{ borderTop: `3px solid ${BLUE}` }} />
@@ -308,7 +310,7 @@ export function MedicalReportModal({ visitId, onClose }) {
                           className="flex-1 flex items-center justify-center text-white italic font-semibold text-[12px]"
                           style={{ background: BLUE }}
                         >
-                          {LETTERHEAD.motto}
+                          {motto}
                         </div>
                         <div className="w-1/5" style={{ background: GREEN }} />
                       </div>
@@ -347,7 +349,7 @@ export function MedicalReportModal({ visitId, onClose }) {
 
                           <div className="text-right pr-2 py-1 font-bold">Age:</div>
                           <div className="border border-gray-400 border-t-0 px-2 py-1">
-                            {visit.patient_age != null ? `${visit.patient_age} Year(s)` : ''}
+                            {visit.patient_age != null ? `${visit.patient_age} ${visit.patient_age_unit}` : ''}
                           </div>
                           <div className="text-right pr-2 py-1 font-bold">Gender:</div>
                           <div className="border border-gray-400 border-t-0 border-l-0 px-2 py-1">{cap(visit.patient_gender || '')}</div>

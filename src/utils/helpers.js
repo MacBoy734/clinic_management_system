@@ -50,6 +50,24 @@ export function timeAgo(dateStr) {
   return formatDate(dateStr)
 }
 
+export function timeAgoShort(date) {
+  if (!date) return '—'
+  const diff = Math.floor((Date.now() - new Date(date)) / 1000)
+  if (diff < 60) return 'Just now'
+  if (diff < 3600) {
+    const m = Math.floor(diff / 60)
+    return `${m} min${m > 1 ? 's' : ''} ago`
+  }
+  if (diff < 86400) {
+    const h = Math.floor(diff / 3600)
+    return `${h} hr${h > 1 ? 's' : ''} ago`
+  }
+  const days = Math.floor(diff / 86400)
+  if (days === 1) return 'Yesterday'
+  if (days < 7) return `${days} days ago`
+  return new Date(date).toLocaleDateString('en-KE', { day: 'numeric', month: 'short' })
+}
+
 
 // Minutes since arrival (for queue wait times)
 export function waitMinutes(dateStr) {

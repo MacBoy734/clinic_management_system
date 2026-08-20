@@ -58,7 +58,7 @@ export default function ExpiringMedsTab() {
   const [sortBy, setSortBy] = useState('expiry_asc')
   const [categoryFilter, setCategoryFilter] = useState('all')
 
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, isFetching, refetch } = useQuery({
     queryKey: ['doctor', 'drug-stock'],
     queryFn: () => api.get('/api/doctor/drug-stock'),
     refetchInterval: 60000,
@@ -191,7 +191,21 @@ export default function ExpiringMedsTab() {
           </div>
         )}
 
-        <span className="text-[11px] text-gray-400 ml-auto">{filtered.length} drug(s)</span>
+                <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[11px] text-gray-400">{filtered.length} drug(s)</span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
       </div>
 
       {/* Table */}

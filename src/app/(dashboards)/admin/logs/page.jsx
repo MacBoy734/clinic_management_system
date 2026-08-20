@@ -10,6 +10,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
+import { Icon } from '@/utils/helpers'
 
 // ─── Categories — aligned to AuditLog.category values in the schema ──────────
 const CATEGORIES = {
@@ -160,7 +161,7 @@ export default function AdminLogsPage() {
   const [alertsOnly, setAlertsOnly] = useState(false)
   const [page, setPage] = useState(1)
 
-  const { data: logsData, isLoading, isError, error } = useQuery({
+  const { data: logsData, isLoading, isError, isFetching, error } = useQuery({
     queryKey: ['admin', 'logs', { page, category, search }],
     queryFn: () => api.get(
       `/api/admin/logs?page=${page}&limit=${LIMIT}&category=${category}&search=${encodeURIComponent(search)}`
@@ -207,7 +208,7 @@ export default function AdminLogsPage() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
+            {/* Header */}
       <div className="flex items-start justify-between">
         <div>
           <h2 className="text-[18px] font-bold text-gray-900 dark:text-gray-100">System Logs</h2>
@@ -215,17 +216,34 @@ export default function AdminLogsPage() {
             Full audit trail — every action across all roles
           </p>
         </div>
-        <button
-          onClick={handleExportCsv}
-          disabled={!filtered.length}
-          className="flex items-center gap-1.5 px-4 py-2 bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 text-[13px] font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors disabled:opacity-50"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-          </svg>
-          Export page
-        </button>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-gray-500 dark:text-gray-400">
+            {total} entr{total !== 1 ? 'ies' : 'y'}
+          </span>
+          <button
+            onClick={() => refetch()}
+            disabled={isFetching}
+            className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+          >
+            <Icon 
+              name="refresh" 
+              size={13} 
+              className={isFetching ? 'animate-spin' : ''} 
+            />
+            {isFetching ? 'Refreshing…' : 'Refresh'}
+          </button>
+          <button
+            onClick={handleExportCsv}
+            disabled={!filtered.length}
+            className="flex items-center gap-1.5 px-4 py-2 bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-600 text-gray-600 dark:text-gray-400 text-[13px] font-medium rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors disabled:opacity-50"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+            </svg>
+            Export page
+          </button>
+        </div>
       </div>
 
       {/* Stats strip */}
