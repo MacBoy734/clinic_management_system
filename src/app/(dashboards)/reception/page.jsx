@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import {
   SkeletonList, ErrorState, EmptyState, Card, Badge, Icon,
-  badgeClass, cap, formatTime, formatMoney, waitMinutes, VISIT_TYPES,
+  badgeClass, cap, formatTime, formatMoney, waitMinutes, VISIT_TYPES, timeAgo
 } from '@/utils/helpers'
 import { PaymentModal } from '@/components/reception/paymentModal'
 import { registerVisitSchema } from '@/lib/validation'
@@ -426,7 +426,7 @@ export default function QueueTab() {
   return (
     <div className="space-y-4">
 
-            {/* Toolbar */}
+      {/* Toolbar */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         {/* Filter pills */}
         <div className="flex items-center gap-2 flex-wrap">
@@ -453,10 +453,10 @@ export default function QueueTab() {
             disabled={isFetching}
             className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
           >
-            <Icon 
-              name="refresh" 
-              size={13} 
-              className={isFetching ? 'animate-spin' : ''} 
+            <Icon
+              name="refresh"
+              size={13}
+              className={isFetching ? 'animate-spin' : ''}
             />
             {isFetching ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -521,7 +521,7 @@ export default function QueueTab() {
 
                   {/* Wait time */}
                   <div className="text-right shrink-0 hidden sm:block">
-                    <p className={`text-[13px] font-semibold tabular-nums ${waitColor}`}>{wait}m</p>
+                    <p className={`text-[13px] font-semibold tabular-nums ${waitColor}`}>{timeAgo(v.arrived_at)}</p>
                     <p className="text-[10px] text-gray-400">{formatTime(v.arrived_at)}</p>
                   </div>
 

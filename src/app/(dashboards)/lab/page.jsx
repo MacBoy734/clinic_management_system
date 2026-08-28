@@ -17,7 +17,7 @@ import { useAuthStore } from '@/store/authStore'
 import {
   StatCard, SkeletonCard, SkeletonList, ErrorState, EmptyState,
   Card, Badge, Icon, Spinner,
-  badgeClass, cap, formatTime, waitMinutes,
+  badgeClass, cap, formatTime, waitMinutes, timeAgo
 } from '@/utils/helpers'
 import socket from '@/lib/socket'
 import { ResultsModal } from '@/components/lab/ResultsModal'
@@ -290,7 +290,7 @@ function QueueCard({ req, onStart, onEnterResults, starting }) {
                 {formatTime(req.ordered_at)}
               </span>
               <span className="text-gray-300 dark:text-gray-600">·</span>
-              <span className={`tabular-nums ${waitColor}`}>{wait} min wait</span>
+              <span className={`tabular-nums ${waitColor}`}>{timeAgo(req.ordered_at)}</span>
               {/* queue number from visit */}
               {req.queue_number && (
                 <>

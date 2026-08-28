@@ -831,24 +831,6 @@ export default function PatientArchivePage() {
               value={(stats.total_patients ?? 0).toLocaleString()}
               sub={PERIODS.find((p) => p.key === period)?.label.toLowerCase()}
             />
-            <StatCard
-              label="Total billed"
-              value={`KES ${((stats.total_billed || 0) / 1000).toFixed(0)}k`}
-              sub={PERIODS.find((p) => p.key === period)?.label.toLowerCase()}
-              accent="border-emerald-200 dark:border-emerald-700/40"
-            />
-            <StatCard
-              label="Unpaid balance"
-              value={`KES ${((stats.unpaid_balance || 0) / 1000).toFixed(0)}k`}
-              sub="outstanding"
-              accent="border-amber-200 dark:border-amber-700/40"
-            />
-            <StatCard
-              label="Top diagnosis"
-              value={stats.top_diagnosis ?? '—'}
-              sub="most common"
-              accent="border-blue-200 dark:border-blue-700/40"
-            />
           </div>
 
           {/* Visit type filter tabs */}
@@ -956,8 +938,6 @@ export default function PatientArchivePage() {
                       <th className="text-left px-5 py-3">Type</th>
                       <th className="text-left px-5 py-3">Last diagnosis</th>
                       <th className="text-left px-5 py-3">Visits</th>
-                      <th className="text-left px-5 py-3">Total billed</th>
-                      <th className="text-left px-5 py-3">Unpaid</th>
                       <th className="text-left px-5 py-3"></th>
                     </tr>
                   </thead>
@@ -1015,22 +995,6 @@ export default function PatientArchivePage() {
                           {/* Total visits */}
                           <td className="px-5 py-3.5">
                             <span className="font-semibold text-gray-800 dark:text-gray-200">{p.total_visits}</span>
-                          </td>
-
-                          {/* Total billed */}
-                          <td className="px-5 py-3.5 font-mono font-semibold text-gray-900 dark:text-gray-100">
-                            {p.total_billed.toLocaleString()}
-                          </td>
-
-                          {/* Unpaid balance */}
-                          <td className="px-5 py-3.5">
-                            {p.unpaid_balance > 0 ? (
-                              <span className="font-mono font-semibold text-amber-600 dark:text-amber-400">
-                                {p.unpaid_balance.toLocaleString()}
-                              </span>
-                            ) : (
-                              <span className="text-emerald-500 dark:text-emerald-400 text-[11px] font-semibold">Cleared</span>
-                            )}
                           </td>
 
                           {/* Action */}

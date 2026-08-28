@@ -215,11 +215,12 @@ function VitalsBlock({ vitals }) {
 
 function LabBlock({ labRequests }) {
   if (!labRequests?.length) return <EmptyBlock text="No lab tests ordered for this visit." />
+  
   return (
     <div className="space-y-3">
       {labRequests.map(r => (
         <div key={r.id} className="rounded-xl border border-gray-100 dark:border-gray-700/60 overflow-hidden">
-          {/* Batch header */}
+          {/* Request header */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-gray-50 dark:bg-gray-800/40 border-b border-gray-100 dark:border-gray-700/60">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[12px] font-semibold text-gray-700 dark:text-gray-300">
@@ -241,8 +242,48 @@ function LabBlock({ labRequests }) {
             <span className="text-[11px] text-gray-400 dark:text-gray-500 whitespace-nowrap">
               {fmtDateTime(r.requested_at)}
             </span>
-
           </div>
+
+          {/* Test items */}
+          {r.items?.length > 0 && (
+            <div className="divide-y divide-gray-50 dark:divide-gray-700/40">
+              {r.items.map(item => (
+                <div key={item.id} className="px-4 py-2.5 flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.test_name}</p>
+                      {item.flagged && (
+                        <Badge className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border-red-100 dark:border-red-800/40">
+                          ⚠ Flagged
+                        </Badge>
+                      )}
+                      <Badge className={LAB_STATUS_COLORS[item.status]}>{cap(item.status)}</Badge>
+                    </div>
+                    {item.reference_range && (
+                      <p className="text-[11px] text-gray-400 dark:text-gray-500 mt-0.5">
+                        Ref: {item.reference_range}
+                      </p>
+                    )}
+                    {item.result && (
+                      <div className="mt-1.5 rounded-lg bg-gray-50 dark:bg-gray-800/40 border border-gray-100 dark:border-gray-700/40 px-3 py-2">
+                        <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wide mb-0.5">Result</p>
+                        <p className="text-[13px] text-gray-800 dark:text-gray-200 font-medium">{item.result}</p>
+                        {item.result_notes && (
+                          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 italic">{item.result_notes}</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="text-[12px] font-mono font-semibold text-gray-700 dark:text-gray-300 tabular-nums">
+                      KES {fmt(item.unit_cost)}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {r.notes && (
             <div className="px-4 py-2 border-t border-gray-50 dark:border-gray-700/40 bg-gray-50/50 dark:bg-gray-800/20">
               <p className="text-[11px] text-gray-500 dark:text-gray-400 italic">{r.notes}</p>
@@ -329,11 +370,42 @@ function BillBlock({ bill }) {
   if (!bill) return <EmptyBlock text="No bill generated for this visit." />
 
   const feeLines = [
-    { label: 'Consultation', amount: bill.consultation_fee, status: bill.consultation_fee_status, paidAt: bill.consultation_fee_paid_at },
-    { label: 'Lab Tests', amount: bill.lab_fee, status: bill.stage2_status, paidAt: bill.stage2_paid_at },
-    { label: 'Medication', amount: bill.medication_fee, status: bill.stage2_status, paidAt: null },
-    { label: 'Procedure', amount: bill.procedure_fee, status: bill.stage2_status, paidAt: null },
+    { 
+      label: 'Consultation', 
+      amount: bill.consultation_fee, 
+      status: bill.consultation_fee_status,
+      waivedBy: bill.consultation_fee_waived_by,
+      waiveReason: bill.consultation_fee_waive_reason,
+      waivedAt: bill.consultation_fee_waived_at,
+    },
+    { 
+      label: 'Lab Tests', 
+      amount: bill.lab_fee, 
+      status: bill.stage2_status,
+      waivedBy: bill.stage2_waived_by,
+      waiveReason: bill.stage2_waive_reason,
+      waivedAt: bill.stage2_waived_at,
+    },
+    { 
+      label: 'Medication', 
+      amount: bill.medication_fee, 
+      status: bill.stage2_status,
+      waivedBy: bill.stage2_waived_by,
+      waiveReason: bill.stage2_waive_reason,
+      waivedAt: bill.stage2_waived_at,
+    },
+    { 
+      label: 'Procedure', 
+      amount: bill.procedure_fee, 
+      status: bill.stage2_status,
+      waivedBy: bill.stage2_waived_by,
+      waiveReason: bill.stage2_waive_reason,
+      waivedAt: bill.stage2_waived_at,
+    },
   ].filter(l => l.amount > 0)
+
+  const hasWaivers = feeLines.some(l => l.waivedBy)
+  const hasDiscount = bill.discount_amount > 0
 
   return (
     <div className="space-y-4">
@@ -341,17 +413,45 @@ function BillBlock({ bill }) {
       <div className="rounded-xl border border-gray-100 dark:border-gray-700/60 overflow-hidden">
         <div className="divide-y divide-gray-50 dark:divide-gray-700/40">
           {feeLines.map(l => (
-            <div key={l.label} className="flex items-center justify-between px-4 py-2.5">
-              <div className="flex items-center gap-2">
-                <span className="text-[13px] text-gray-700 dark:text-gray-300">{l.label}</span>
-                <Badge className={FEE_STATUS_COLORS[l.status]}>{cap(l.status)}</Badge>
+            <div key={l.label} className="px-4 py-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-[13px] text-gray-700 dark:text-gray-300">{l.label}</span>
+                  <Badge className={FEE_STATUS_COLORS[l.status]}>{cap(l.status)}</Badge>
+                </div>
+                <span className="text-[13px] font-mono font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
+                  KES {fmt(l.amount)}
+                </span>
               </div>
-              <span className="text-[13px] font-mono font-semibold text-gray-900 dark:text-gray-100 tabular-nums">
-                KES {fmt(l.amount)}
-              </span>
+              {/* Waiver detail inline */}
+              {l.waivedBy && (
+                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/30 rounded-md px-2.5 py-1.5 border border-gray-100 dark:border-gray-700/40">
+                  <span className="text-amber-600 dark:text-amber-400 font-medium">Waived</span>
+                  <span>by {l.waivedBy}</span>
+                  {l.waiveReason && <span>· "{l.waiveReason}"</span>}
+                  {l.waivedAt && <span>· {fmtDateTime(l.waivedAt)}</span>}
+                </div>
+              )}
             </div>
           ))}
         </div>
+
+        {/* Discount (bill-level) */}
+        {hasDiscount && (
+          <div className="px-4 py-2.5 bg-amber-50/50 dark:bg-amber-950/20 border-t border-dashed border-amber-100 dark:border-amber-800/30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] text-amber-700 dark:text-amber-400 font-medium">Discount</span>
+                {bill.discount_reason && (
+                  <span className="text-[11px] text-amber-600 dark:text-amber-400">"{bill.discount_reason}"</span>
+                )}
+              </div>
+              <span className="text-[13px] font-mono font-semibold text-amber-700 dark:text-amber-400 tabular-nums">
+                – KES {fmt(bill.discount_amount)}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Totals */}
         <div className="bg-gray-50 dark:bg-gray-800/40 border-t border-gray-100 dark:border-gray-700/60 px-4 py-3 space-y-1.5">
@@ -359,6 +459,12 @@ function BillBlock({ bill }) {
             <span className="text-gray-900 dark:text-gray-100">Total</span>
             <span className="tabular-nums">KES {fmt(bill.total_amount)}</span>
           </div>
+          {hasDiscount && (
+            <div className="flex justify-between text-[12px]">
+              <span className="text-amber-600 dark:text-amber-400">Less Discount</span>
+              <span className="text-amber-700 dark:text-amber-400 tabular-nums font-medium">– KES {fmt(bill.discount_amount)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-[12px]">
             <span className="text-emerald-600 dark:text-emerald-400">Paid</span>
             <span className="text-emerald-700 dark:text-emerald-400 tabular-nums font-semibold">KES {fmt(bill.paid_amount)}</span>
@@ -369,13 +475,25 @@ function BillBlock({ bill }) {
               <span className="text-amber-700 dark:text-amber-400 tabular-nums font-semibold">KES {fmt(bill.balance)}</span>
             </div>
           )}
+          {bill.balance === 0 && bill.fee_status !== 'waived' && (
+            <div className="flex justify-between text-[12px]">
+              <span className="text-emerald-600 dark:text-emerald-400">Status</span>
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold">Fully Paid</span>
+            </div>
+          )}
+          {bill.fee_status === 'waived' && (
+            <div className="flex justify-between text-[12px]">
+              <span className="text-gray-500 dark:text-gray-400">Status</span>
+              <Badge className={FEE_STATUS_COLORS.waived}>Waived</Badge>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Payment history */}
       {bill.payments?.length > 0 && (
         <div>
-          <SectionTitle count={bill?.payments?.length}>Payment History</SectionTitle>
+          <SectionTitle count={bill.payments.length}>Payment History</SectionTitle>
           <div className="space-y-2">
             {bill.payments.map(p => (
               <div key={p.id} className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-gray-100 dark:border-gray-700/60 bg-white dark:bg-[#1e293b]">
@@ -403,6 +521,28 @@ function BillBlock({ bill }) {
                 </span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Audit trail for financial adjustments */}
+      {(hasWaivers || hasDiscount) && (
+        <div className="rounded-lg border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-800/30 px-4 py-3">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 dark:text-gray-500 mb-2">Financial Adjustments</p>
+          <div className="space-y-1.5">
+            {feeLines.filter(l => l.waivedBy).map(l => (
+              <p key={l.label} className="text-[11px] text-gray-600 dark:text-gray-400">
+                <span className="font-semibold">{l.label}</span> waived by {l.waivedBy}
+                {l.waiveReason ? ` · "${l.waiveReason}"` : ''}
+                {l.waivedAt ? ` · ${fmtDateTime(l.waivedAt)}` : ''}
+              </p>
+            ))}
+            {hasDiscount && (
+              <p className="text-[11px] text-gray-600 dark:text-gray-400">
+                <span className="font-semibold">Discount</span> of KES {fmt(bill.discount_amount)}
+                {bill.discount_reason ? ` · "${bill.discount_reason}"` : ''}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -578,10 +718,10 @@ function VisitCard({ visit, defaultOpen = false }) {
               </div>
             )}
 
-            {/* {section === 'vitals' && <VitalsBlock vitals={visit.vitals} />} */}
+            {section === 'vitals' && <VitalsBlock vitals={visit.vitals} />} 
             {section === 'lab' && <LabBlock labRequests={visit.lab_requests} />}
             {section === 'prescriptions' && <RxBlock prescriptions={visit.prescriptions} />}
-            {section === 'billing' && <BillBlock bill={visit.financial_summary} />}
+            {section === 'billing' && <BillBlock bill={visit.bill} />}
           </div>
         </div>
       )}
@@ -636,7 +776,41 @@ export default function PatientDetailPage() {
 
   if (!data) return null
 
-  const { patient, financial_summary: fin, lab_summary: lab, visit_summary: vs, visits } = data
+  // API returns the patient object flat — not wrapped
+  const patient = data
+  const visits = data.visits || []
+
+  // Derive financial summary from flat response + visits
+  const fin = {
+    total_billed: data.total_billed || 0,
+    unpaid_balance: data.unpaid_balance || 0,
+    by_category: visits.reduce((acc, v) => {
+      acc.consultation += v.bill?.consultation_fee || 0
+      acc.lab += v.bill?.lab_fee || 0
+      acc.medication += v.bill?.medication_fee || 0
+      acc.procedure += v.bill?.procedure_fee || 0
+      return acc
+    }, { consultation: 0, lab: 0, medication: 0, procedure: 0 }),
+  }
+
+  // Derive lab summary from visits
+  const allLabs = visits.flatMap(v => v.lab_requests || [])
+  const lab = {
+    total_tests: allLabs.reduce((s, r) => s + (r.items?.length || 0), 0),
+    tests_ready: allLabs.filter(r => r.status === 'ready').length,
+    tests_pending: allLabs.filter(r => r.status === 'pending' || r.status === 'in_progress').length,
+    tests_flagged: allLabs.filter(r => r.is_flagged).length,
+  }
+
+  // Derive visit summary from visits
+  const vs = {
+    total: data.total_visits || 0,
+    last_visit: visits[0]?.arrived_at || null,
+    by_type: visits.reduce((acc, v) => {
+      acc[v.visit_type] = (acc[v.visit_type] || 0) + 1
+      return acc
+    }, {}),
+  }
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8 space-y-6">

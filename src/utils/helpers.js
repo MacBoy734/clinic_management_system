@@ -1,7 +1,3 @@
-// Shared helpers + constants used across all dashboards.
-// Follows the design system: brand blue #1a6cbf, specific stat card colors, status badges.
-
-// ─── Format helpers ────────────────────────────────────────────────
 
 // Format money as Kenyan Shillings
 export function formatMoney(amount) {

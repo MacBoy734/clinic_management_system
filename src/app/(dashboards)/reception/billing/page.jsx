@@ -1,9 +1,5 @@
 'use client'
 
-// BillingTab — stage 2 billing desk
-// Architecture: fees start at 0, departments increment them.
-// Bill is resolved when both stages are paid or waived.
-// Receipts ONLY print when is_resolved === true.
 
 import { useState } from 'react'
 import toast from 'react-hot-toast'
@@ -11,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import {
   SkeletonTable, ErrorState, EmptyState, Card, Badge, Icon,
-  badgeClass, cap, formatMoney, formatTime,
+  badgeClass, cap, formatMoney, formatTime, timeAgoShort
 } from '@/utils/helpers'
 import { PaymentModal } from '@/components/reception/paymentModal'
 import { ReceiptModal } from '@/components/reception/ReceiptModal'
@@ -87,11 +83,23 @@ export default function BillingTab() {
   }
 
   // ── Grouping by resolution state ─────────────────────────────────
-  const readyForBilling = bills.filter((b) => b.visit_status === 'billing' && !b.is_resolved)
-  const inProcess = bills.filter((b) => !b.is_resolved && b.visit_status !== 'billing')
-  const completed = bills.filter((b) => b.is_resolved)
+  const readyForBilling = bills.filter((b) => b.visit_status === 'billing' && b.stage2_status === 'pending')
+  const inProcess = bills.filter((b) => b.stage2_status === 'pending' && b.visit_status !== 'billing')
+  const completed = bills.filter((b) => b.status === 'paid' && b.visit_status === 'done')
 
-  const totalCollected = completed.reduce((s, b) => s + b.paid_amount, 0)
+  const methodTotals = completed
+    .flatMap((b) => b.payments || [])
+    .reduce((acc, p) => {
+      const method = p.method || 'other'
+      acc[method] = (acc[method] || 0) + p.amount
+      return acc
+    }, {})
+
+  const totalCollected = Object.values(methodTotals).reduce((s, v) => s + v, 0)
+  const methodsWithMoney = Object.entries(methodTotals)
+    .filter(([, amount]) => amount > 0)
+    .sort(([, a], [, b]) => b - a)
+
   const totalReady = readyForBilling.reduce((s, b) => s + b.payable_amount, 0)
   const totalPending = inProcess.reduce((s, b) => s + b.payable_amount, 0)
 
@@ -123,24 +131,6 @@ export default function BillingTab() {
         </div>
       </div>
 
-      {/* Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Collected Today</p>
-          <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400 mt-1">{formatMoney(totalCollected)}</p>
-        </Card>
-        <Card className="p-4 border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/50 dark:bg-emerald-950/20">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-emerald-700 dark:text-emerald-400">Ready for Billing</p>
-          <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400 mt-1">{formatMoney(totalReady)}</p>
-          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{readyForBilling.length} patient{readyForBilling.length !== 1 ? 's' : ''} at desk</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">In Process</p>
-          <p className="text-xl font-bold text-amber-700 dark:text-amber-400 mt-1">{formatMoney(totalPending)}</p>
-          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{inProcess.length} patient{inProcess.length !== 1 ? 's' : ''} still in consultation/lab/pharmacy</p>
-        </Card>
-      </div>
-
       {/* Ready for billing */}
       {readyForBilling.length > 0 && (
         <div>
@@ -167,7 +157,7 @@ export default function BillingTab() {
                     <tr key={b.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20 bg-emerald-50/30 dark:bg-emerald-950/10">
                       <td className="px-4 py-3">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{b.patient_name}</p>
-                        <p className="text-[10px] text-gray-400">Arrived {formatTime(b.created_at)}</p>
+                        <p className="text-[10px] text-gray-400">Arrived {timeAgoShort(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">
@@ -185,7 +175,7 @@ export default function BillingTab() {
                       </td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(b.effective_total ?? b.total_amount)}</td>
                       <td className="px-4 py-3 text-right text-[13px] font-semibold text-red-600 dark:text-red-400 tabular-nums">{formatMoney(b.payable_amount)}</td>
-                      <td className="px-4 py-3 text-center"><Badge className={badgeClass(b.status)}>{cap(b.status)}</Badge></td>
+                      <td className="px-4 py-3 text-center"><Badge className={badgeClass(b.stage2_status)}>{cap(b.stage2_status)}</Badge></td>
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <button onClick={() => setPaying(b)}
@@ -228,7 +218,7 @@ export default function BillingTab() {
                     <tr key={b.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20 opacity-75">
                       <td className="px-4 py-3">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{b.patient_name}</p>
-                        <p className="text-[10px] text-gray-400">Arrived {formatTime(b.created_at)}</p>
+                        <p className="text-[10px] text-gray-400">Arrived {timeAgoShort(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">
@@ -287,7 +277,7 @@ export default function BillingTab() {
                     <tr key={b.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                       <td className="px-4 py-3">
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{b.patient_name}</p>
-                        <p className="text-[10px] text-gray-400">{formatTime(b.created_at)}</p>
+                        <p className="text-[10px] text-gray-400">{timeAgoShort(b.created_at)}</p>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-wrap gap-1.5">

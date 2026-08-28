@@ -85,9 +85,10 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
 
   const discountTooBig = discountNum > outstanding
   const discountNeedsReason = discountNum > 0 && !discountReason.trim()
-  const invalidLine = lines.some((l) => !((parseInt(l.amount) || 0) > 0))
+   const hasValidLine = lines.some((l) => (parseInt(l.amount) || 0) > 0)
+  const isOverpaid = remaining < 0
   const canSubmit =
-    !loading && payable >= 0 && remaining === 0 && !invalidLine &&
+    !loading && payable >= 0 && !isOverpaid && hasValidLine &&
     !discountTooBig && !discountNeedsReason &&
     (payable > 0 || discountNum > 0)
 
@@ -341,12 +342,19 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
                             })}
                           </div>
                           {/* Amount */}
-                          <input
+                                  <input
                             type="number"
                             min="1"
                             step="1"
                             value={l.amount}
-                            onChange={(e) => updateLine(l.key, 'amount', e.target.value)}
+                            onChange={(e) => {
+                              const val = e.target.value
+                              if (val === '') {
+                                updateLine(l.key, 'amount', '')
+                              } else {
+                                updateLine(l.key, 'amount', String(Math.max(0, parseInt(val) || 0)))
+                              }
+                            }}
                             placeholder="Amount"
                             className={`${inputCls} flex-1 tabular-nums`}
                           />
@@ -422,18 +430,26 @@ export function PaymentModal({ visit, title, description, amount, stage = 2, loa
                   <> · discount <span className="font-semibold text-amber-600 dark:text-amber-400 tabular-nums">{formatMoney(discountNum)}</span></>
                 )}
               </div>
-              <button
+                          <button
                 onClick={handleSubmit}
                 disabled={!canSubmit}
                 title={
-                  remaining !== 0 ? 'Payments must settle the balance exactly'
+                  isOverpaid ? 'Payments cannot exceed the balance'
                     : discountNeedsReason ? 'Enter a reason for the discount'
-                      : undefined
+                      : !hasValidLine ? 'Enter at least one payment amount'
+                        : undefined
                 }
-                className="px-4 py-2 rounded-lg text-[13px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className={[
+                  'px-4 py-2 rounded-lg text-[13px] font-medium flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed',
+                  remaining === 0
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                    : 'bg-amber-600 hover:bg-amber-700 text-white',
+                ].join(' ')}
               >
                 {loading ? <Icon name="refresh" size={14} className="animate-spin" /> : <Icon name="check" size={14} />}
-                Collect {formatMoney(linesSum)}
+                {remaining === 0
+                  ? `Collect ${formatMoney(linesSum)}`
+                  : `Record Partial — Balance ${formatMoney(remaining)}`}
               </button>
             </>
           )}

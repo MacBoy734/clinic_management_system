@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
@@ -218,7 +218,7 @@ export default function StockTab() {
     }
   }
 
-  const colCount = 4 + (showCategoryColumn ? 1 : 0) + (showDrugColumns ? 1 : 0) + 2
+  const colCount = 5 + (showCategoryColumn ? 1 : 0) + (showDrugColumns ? 1 : 0) + 2
 
   return (
     <div className="space-y-4">
@@ -358,6 +358,7 @@ export default function StockTab() {
                   <Th>Sub-category</Th>
                   {showDrugColumns && <Th>Form / Strength</Th>}
                   <Th>Stock Level</Th>
+                  <Th>Shelf</Th>
                   <Th align="right">Price</Th>
                   <Th>Expiry</Th>
                   <Th align="right">Action</Th>
@@ -525,7 +526,12 @@ function StockRow({
             </span>
             <span className="text-[10px] text-gray-400">/ {item.reorder_level}</span>
           </div>
-          <p className="text-[10px] text-gray-400 mt-0.5">{item.unit}</p>
+                    <p className="text-[10px] text-gray-400 mt-0.5">{item.unit}</p>
+        </td>
+
+        {/* Shelf */}
+        <td className="px-4 py-3">
+          <ShelfBadge location={item.shelf_location} />
         </td>
 
         {/* Price — retail on top, cost below, so margin is visible */}
@@ -593,7 +599,8 @@ function StockRow({
               />
               <InfoTile label="Normal Price" value={formatMoney(item.normal_price)} />
               <InfoTile label="Promotional" value={formatMoney(item.promotional_price)} />
-              <InfoTile label="Wholesale" value={formatMoney(item.wholesale_price)} />
+                            <InfoTile label="Wholesale" value={formatMoney(item.wholesale_price)} />
+              <ShelfLocationTile item={item} />
             </div>
 
             {pending && (
@@ -626,6 +633,134 @@ function InfoTile({ label, value }) {
     <div className="rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 p-2.5">
       <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
       <p className="text-[12px] text-gray-900 dark:text-gray-100 mt-0.5 truncate">{value || '—'}</p>
+    </div>
+  )
+}
+
+// ShelfBadge — compact coloured pill for the table cell.
+// Blue for shelf items, cyan + thermometer icon for fridge items.
+function ShelfBadge({ location }) {
+  if (!location) {
+    return <span className="text-[11px] italic text-gray-400 dark:text-gray-500">not set</span>
+  }
+  const isFridge = String(location).toLowerCase().startsWith('fridge')
+  const cls = isFridge
+    ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
+    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold whitespace-nowrap ${cls}`}
+      title={isFridge ? 'Stored in fridge' : 'Stored on shelf'}
+    >
+      {isFridge && <Icon name="thermometer" size={11} />}
+      {!isFridge && <Icon name="box" size={11} />}
+      {location}
+    </span>
+  )
+}
+
+// ShelfLocationTile — inline-editable tile in the expanded details.
+// Click Edit → input + Save/Cancel. PUT /api/admin/drug-stock/:id
+// Invalidates the pharmacy stock list so the table cell badge refreshes.
+function ShelfLocationTile({ item }) {
+  const queryClient = useQueryClient()
+  const location = item.shelf_location || ''
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(location)
+
+  useEffect(() => {
+    setValue(item.shelf_location || '')
+  }, [item.shelf_location])
+
+  const saveMut = useMutation({
+    mutationFn: (next) =>
+      api.patch(`/api/pharmacy/stock/${item.id}`, { shelf_location: String(next).trim() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pharmacy'] })
+      toast.success('Shelf location updated')
+      setEditing(false)
+    },
+    onError: (err) => toast.error(err?.message || 'Could not update shelf location'),
+  })
+
+  const cancel = () => {
+    setEditing(false)
+    setValue(location)
+  }
+  const save = () => {
+    const next = String(value || '').trim()
+    if (!next) {
+      toast.error('Shelf location cannot be empty')
+      return
+    }
+    if (next === location) {
+      setEditing(false)
+      return
+    }
+    saveMut.mutate(next)
+  }
+
+  return (
+    <div className="rounded-lg bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 p-2.5">
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+          Shelf Location
+        </p>
+        {!editing && (
+          <button
+            onClick={() => {
+              setValue(location)
+              setEditing(true)
+            }}
+            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold rounded-md text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30"
+          >
+            <Icon name="edit" size={10} />
+            Edit
+          </button>
+        )}
+      </div>
+      {editing ? (
+        <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            autoFocus
+            placeholder="e.g. Shelf B3 or Fridge A2"
+            className="flex-1 min-w-35 px-2 py-1 text-[12px] font-medium rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-400"
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') save()
+              if (e.key === 'Escape') cancel()
+            }}
+          />
+          <button
+            onClick={save}
+            disabled={saveMut.isPending}
+            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold rounded-md bg-[#1a6cbf] hover:bg-[#155a9f] text-white disabled:opacity-50"
+          >
+            {saveMut.isPending ? '…' : <Icon name="check" size={11} />}
+            Save
+          </button>
+          <button
+            onClick={cancel}
+            disabled={saveMut.isPending}
+            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-300 disabled:opacity-50"
+          >
+            <Icon name="x" size={11} />
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className="mt-0.5 flex items-center gap-2">
+          {location ? (
+            <ShelfBadge location={location} />
+          ) : (
+            <span className="text-[12px] italic text-gray-400 dark:text-gray-500">
+              No location set
+            </span>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -33,8 +33,7 @@ export default function ReferralsTab() {
   })
 
   const stats = data?.stats || {}
-  // Only pending referrals are shown — paid ones disappear completely.
-  const referrals = (data?.referrals || []).filter((r) => r.status === 'pending')
+  const referrals = (data?.referrals || [])
 
   const handlePay = async (referral, amountPaid, notes) => {
     try {
@@ -78,7 +77,7 @@ export default function ReferralsTab() {
         <h2 className="text-[16px] font-bold text-gray-900 dark:text-gray-100">Referrals</h2>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-gray-500 dark:text-gray-400">
-            {referrals.length} pending
+            {referrals.filter(r => r.status !== 'paid').length} pending
           </span>
           <button
             onClick={() => refetch()}
@@ -104,7 +103,7 @@ export default function ReferralsTab() {
               <Icon name="clock" size={18} />
             </div>
           </div>
-          <p className="text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-400">{referrals.length}</p>
+          <p className="text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-400">{referrals.filter(r => r.status !== 'paid').length}</p>
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">referrals awaiting commission</p>
         </Card>
         <Card className="p-4">
@@ -193,6 +192,7 @@ function ReferralCard({ referral, onPay }) {
         </div>
 
         {/* Right: pay button */}
+        {referral?.status === 'pending' ? (
         <div className="shrink-0">
           <button
             onClick={onPay}
@@ -201,6 +201,10 @@ function ReferralCard({ referral, onPay }) {
             <Icon name="dollarSign" size={13} /> Pay Commission
           </button>
         </div>
+        ) : (
+          <span className='text-green-500 mr-3 font-bold'>paid</span>
+        )
+      }
       </div>
     </Card>
   )
@@ -237,9 +241,8 @@ function PayConfirmModal({ referral, loading, onClose, onConfirm }) {
           {/* Referral details — ONLY referrer, contact, patient, tests */}
           <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 border border-gray-200 dark:border-gray-700/60 p-3 space-y-2">
             <Row label="Referrer" value={referral.referrer_name} />
-            <Row label="Contact" value={referral.referrer_contact || '—'} />
+            <Row label="Contact" value={referral.referrer_phone || '—'} />
             <Row label="Patient referred" value={referral.patient_name} />
-            <Row label="Tests done" value={referral.test_ordered} />
           </div>
 
           {/* Owner enters the commission amount — no suggestion */}
@@ -261,7 +264,7 @@ function PayConfirmModal({ referral, loading, onClose, onConfirm }) {
           </div>
           <div>
             <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">
-              notes (optional) *
+              notes (optional)
             </label>
             <input
               type="text"

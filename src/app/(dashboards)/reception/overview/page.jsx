@@ -56,7 +56,26 @@ export default function OverviewTab({ onNavigate }) {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard icon="users" color="blue" label="Patients Today" value={stats?.total_visits} sublabel="visits registered" />
         <StatCard icon="list" color="amber" label="Waiting" value={stats?.waiting} sublabel="in queue" />
-        <StatCard icon="dollarSign" color="green" label="Revenue Today" value={formatMoney(stats?.revenue_today)} sublabel={`${formatMoney(stats?.stage1_collected)} stage 1`} />
+<Card className="p-4">
+  <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Collected Today</p>
+  <p className="text-xl font-bold text-emerald-700 dark:text-emerald-400 mt-1">
+    {formatMoney(stats?.revenue_today)}
+  </p>
+  {stats?.payments?.by_method && (
+    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+      {Object.entries(stats.payments.by_method)
+        .filter(([, amount]) => amount > 0)
+        .map(([method, amount]) => (
+          <span key={method} className="text-[11px] text-gray-500 dark:text-gray-400">
+            <span className="capitalize">{method}</span>:{' '}
+            <span className="font-medium text-gray-700 dark:text-gray-300 tabular-nums">
+              {formatMoney(amount)}
+            </span>
+          </span>
+        ))}
+    </div>
+  )}
+</Card>
       </div>
 
       {/* Quick actions + visit flow */}

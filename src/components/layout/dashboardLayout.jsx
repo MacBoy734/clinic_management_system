@@ -50,9 +50,9 @@ const NAV_BY_ROLE = {
     { href: '/admin/inventory', label: 'Inventory', icon: 'box' },
     { href: '/admin/finance', label: 'Finance', icon: 'box' },
     { href: '/admin/referrals', label: 'Referrals & Commission', icon: 'dollarSign' },
+    { href: '/admin/reports', label: 'Reports', icon: 'barChart' },
     { href: '/admin/logs', label: 'Logs', icon: 'clipboard' },
     { href: '/admin/notifications', label: 'Notifications', icon: 'bell' },
-    { href: '/admin/reports', label: 'Reports', icon: 'barChart' },
     { href: '/admin/settings', label: 'Settings', icon: 'settings' },
   ],
 }

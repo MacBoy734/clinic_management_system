@@ -108,8 +108,7 @@ export function CancelPrescriptionModal({ prescription, loading, onClose, onConf
             <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
               <Icon name="alert" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
               <p className="text-[11px] text-amber-700 dark:text-amber-400">
-                Cancelling removes the medication fee from the patient&rsquo;s bill and moves them straight to
-                billing. This cannot be undone.
+                Cancelling this prescription removes the medication fee from the patient&rsquo;s bill and sends them back to the doctor. This cannot be undone!
               </p>
             </div>
           </div>

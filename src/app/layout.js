@@ -1,7 +1,7 @@
 import './globals.css'
 
 export const metadata = {
-  title: 'City Health Clinic',
+  title: 'Kitui Health Diagnostic Center',
   description: 'Clinic Management System',
 }
 

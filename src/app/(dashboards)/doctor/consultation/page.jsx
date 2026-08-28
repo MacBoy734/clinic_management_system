@@ -642,7 +642,7 @@ export default function ConsultationTab() {
               title="Prescriptions"
               subtitle={pendingRxCount > 0
                 ? `${pendingRxCount} pending item${pendingRxCount > 1 ? 's' : ''}`
-                : 'No prescriptions yet'
+                : 'No pending prescriptions.'
               }
               action={
                 <button

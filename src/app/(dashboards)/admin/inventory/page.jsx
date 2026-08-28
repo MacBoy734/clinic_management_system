@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
@@ -10,10 +10,13 @@ import {
   SkeletonCard, SkeletonTable, SkeletonList, Spinner,
   formatMoney, formatDate, timeAgo, cap, badgeClass,
 } from '@/utils/helpers'
+import Link from 'next/link'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 
 const SUB_TABS = [
-  { key: 'lab', label: 'Lab Stock', icon: 'flask' },
   { key: 'product', label: 'Product Stock', icon: 'box' },
+  { key: 'lab', label: 'Lab Stock', icon: 'flask' },
   { key: 'restocks', label: 'Restock Verification', icon: 'checkCircle' },
 ]
 
@@ -57,6 +60,60 @@ const EXPIRY_FILTERS = [
 
 const MEDICATION_FORMS = ['tablet', 'capsule', 'injection', 'syrup', 'cream', 'drops']
 const LAB_CATEGORIES = ['supplies', 'hematology', 'chemistry', 'urinalysis', 'microbiology']
+
+// ─── Reorder planner constants ──────────────────────────────────
+const REORDER_FILTERS = [
+  { key: 'all', label: 'All Products' },
+  { key: 'out_of_stock', label: 'Out of Stock' },
+  { key: 'below_reorder', label: 'Below Reorder' },
+  { key: 'fast_moving', label: 'Fast Moving' },
+]
+
+const CATEGORY_FILTERS = [
+  { key: 'all', label: 'All Types' },
+  { key: 'medication', label: 'Medication' },
+  { key: 'consumable', label: 'Consumables' },
+  { key: 'general', label: 'General' },
+]
+
+const MEDICATION_CATEGORY_KEYS = new Set([
+  'medication', 'antibiotic', 'analgesic', 'antihypertensive',
+  'antidiabetic', 'antihistamine', 'antacid', 'vitamin', 'supplement', 'thyroid',
+])
+
+const CONSUMABLE_CATEGORY_KEYS = new Set(['consumable', 'supplies'])
+
+const COMMON_UNITS = [
+  'pieces', 'boxes', 'vials', 'bottles', 'tablets', 'capsules',
+  'sachets', 'packs', 'litres', 'ml', 'grams', 'kg', 'tubes', 'rolls',
+]
+
+const FAST_MOVING_THRESHOLD = 50
+
+function productType(item) {
+  const c = (item?.category || '').toString().toLowerCase().trim()
+  if (MEDICATION_CATEGORY_KEYS.has(c)) return 'medication'
+  if (CONSUMABLE_CATEGORY_KEYS.has(c)) return 'consumable'
+  return 'general'
+}
+
+function isOutOfStock(i) {
+  return (Number(i.current_stock) || 0) === 0
+}
+function isBelowReorder(i) {
+  const s = Number(i.current_stock) || 0
+  const r = Number(i.reorder_level) || 0
+  return s > 0 && s <= r
+}
+function isFastMoving(i) {
+  return (Number(i.monthly_usage) || 0) >= FAST_MOVING_THRESHOLD
+}
+function suggestOrderQty(item) {
+  const stock = Number(item.current_stock) || 0
+  const reorder = Number(item.reorder_level) || 0
+  const usage = Number(item.monthly_usage) || 0
+  return Math.max(reorder * 2 - stock, usage * 2 - stock, reorder, 0)
+}
 
 function daysUntil(dateStr) {
   if (!dateStr) return null
@@ -356,7 +413,7 @@ function LabStockSubTab() {
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                       <td className="px-4 py-3">
-                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.name}</p>
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100"><Link href={`/admin/inventory/${item.id}`}>{item.name}</Link></p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <Badge className={CATEGORY_BADGES[item.category] || CATEGORY_BADGES.other}>{cap(item.category)}</Badge>
                           <span className="text-[10px] text-gray-400">{item.supplier || '—'}</span>
@@ -460,6 +517,7 @@ function ProductStockSubTab() {
   const [editItem, setEditItem] = useState(null)
   const [search, setSearch] = useState('')
   const [showAdd, setShowAdd] = useState(false)
+  const [showReorder, setShowReorder] = useState(false)
   const [categoryFilter, setCategoryFilter] = useState('all')
   const [expiryFilter, setExpiryFilter] = useState('all')
 
@@ -618,12 +676,20 @@ function ProductStockSubTab() {
           title="Product Stock"
           subtitle={`${items.length} of ${totalItems} item${totalItems === 1 ? '' : 's'} loaded`}
           action={
-            <button
-              onClick={() => setShowAdd(true)}
-              className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
-            >
-              <Icon name="plus" size={14} /> Add Item
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setShowReorder(true)}
+                className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-purple-600 hover:bg-purple-700 text-white flex items-center gap-1.5"
+              >
+                <Icon name="shoppingCart" size={14} /> Generate Reorder List
+              </button>
+              <button
+                onClick={() => setShowAdd(true)}
+                className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
+              >
+                <Icon name="plus" size={14} /> Add Item
+              </button>
+            </div>
           }
         />
         {items.length === 0 ? (
@@ -657,7 +723,7 @@ function ProductStockSubTab() {
                   return (
                     <tr key={item.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                       <td className="px-4 py-3">
-                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.name}</p>
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100"><Link href={`/admin/inventory/${item.id}`}>{item.name}</Link></p>
                         {item.category === 'medication' && (
                           <p className="text-[11px] text-gray-400">
                             {item.generic_name || '—'}{item.strength ? ` · ${item.strength}` : ''}
@@ -771,6 +837,12 @@ function ProductStockSubTab() {
               toast.error(err.message || 'Could not update item')
             }
           }}
+        />
+      )}
+
+      {showReorder && (
+        <ReorderModal
+          onClose={() => setShowReorder(false)}
         />
       )}
 
@@ -1508,6 +1580,531 @@ function RestockRejectModal({ restock, loading, onClose, onConfirm }) {
       <Field label="Reason for rejection *">
         <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="e.g. Wrong quantity received, damaged packaging..." className={`${inputCls} resize-none`} />
       </Field>
+    </ModalShell>
+  )
+}
+
+// ─── Reorder Modal ──────────────────────────────────────────────
+function ReorderModal({ onClose }) {
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('all')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [selected, setSelected] = useState({})
+  const [showOrderModal, setShowOrderModal] = useState(false)
+
+  const q = useQuery({
+    queryKey: ['admin', 'drug-stock', 'reorder-list'],
+    queryFn: () => api.get('/api/admin/drug-stock?limit=1000'),
+    staleTime: 30000,
+  })
+
+  const items = Array.isArray(q.data?.items) ? q.data.items : []
+
+  const filtered = useMemo(() => {
+    let result = items
+    if (filter === 'out_of_stock') result = result.filter(isOutOfStock)
+    else if (filter === 'below_reorder') result = result.filter(isBelowReorder)
+    else if (filter === 'fast_moving') result = result.filter(isFastMoving)
+
+    if (categoryFilter !== 'all') {
+      result = result.filter((i) => productType(i) === categoryFilter)
+    }
+
+    const s = search.trim().toLowerCase()
+    if (s) {
+      result = result.filter((i) =>
+        (i.name || '').toLowerCase().includes(s) ||
+        (i.generic_name || '').toLowerCase().includes(s)
+      )
+    }
+    return result
+  }, [items, filter, categoryFilter, search])
+
+  const outOfStockCount = items.filter(isOutOfStock).length
+  const belowReorderCount = items.filter(isBelowReorder).length
+  const fastMovingCount = items.filter(isFastMoving).length
+
+  const selectedIds = Object.keys(selected).filter((id) => {
+    const v = selected[id]
+    return v && Number(v.qty) > 0
+  })
+
+  function toggleSelect(item) {
+    setSelected((prev) => {
+      const next = { ...prev }
+      if (next[item.id]) {
+        delete next[item.id]
+      } else {
+        next[item.id] = { qty: String(suggestOrderQty(item)), unit: item.unit || 'pieces' }
+      }
+      return next
+    })
+  }
+
+  function selectAllVisible() {
+    setSelected((prev) => {
+      const next = { ...prev }
+      filtered.forEach((item) => {
+        if (!next[item.id]) {
+          next[item.id] = { qty: String(suggestOrderQty(item)), unit: item.unit || 'pieces' }
+        }
+      })
+      return next
+    })
+  }
+
+  function clearSelection() {
+    setSelected({})
+  }
+
+  function setQty(id, qty) {
+    setSelected((prev) => ({ ...prev, [id]: { ...prev[id], qty } }))
+  }
+
+  function setUnit(id, unit) {
+    setSelected((prev) => ({ ...prev, [id]: { ...prev[id], unit } }))
+  }
+
+  const orderItems = selectedIds
+    .map((id) => {
+      const item = items.find((i) => String(i.id) === String(id))
+      if (!item) return null
+      const sel = selected[id]
+      return {
+        id: item.id,
+        name: item.name,
+        generic_name: item.generic_name || '',
+        category: item.category,
+        current_stock: Number(item.current_stock) || 0,
+        reorder_level: Number(item.reorder_level) || 0,
+        monthly_usage: Number(item.monthly_usage) || 0,
+        orderQty: Number(sel.qty) || 0,
+        orderUnit: sel.unit || item.unit || 'pieces',
+      }
+    })
+    .filter(Boolean)
+
+  if (q.isLoading) {
+    return (
+      <ModalShell title="Generate Reorder List" subtitle="Loading products…" onClose={onClose}>
+        <div className="space-y-4">
+          <SkeletonTable rows={6} cols={8} />
+        </div>
+      </ModalShell>
+    )
+  }
+  if (q.isError) {
+    return (
+      <ModalShell title="Generate Reorder List" subtitle="Error" onClose={onClose}>
+        <ErrorState message={q.error?.message || 'Could not load products'} onRetry={q.refetch} />
+      </ModalShell>
+    )
+  }
+
+  return (
+    <>
+      <ModalShell
+        title="Generate Reorder List"
+        subtitle={`${items.length} products loaded`}
+        onClose={onClose}
+        maxWidth="max-w-5xl"
+        footer={
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400"
+            >
+              Close
+            </button>
+            <button
+              onClick={() => setShowOrderModal(true)}
+              disabled={selectedIds.length === 0}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50"
+            >
+              <Icon name="download" size={14} /> Download Order ({selectedIds.length})
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-4">
+          {/* Stats */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <StatTile label="Total Products" value={items.length} icon="box" color="blue" sublabel="all SKUs" />
+            <StatTile label="Out of Stock" value={outOfStockCount} icon="xCircle" color="red" sublabel="need urgent reorder" />
+            <StatTile label="Below Reorder" value={belowReorderCount} icon="alert" color="amber" sublabel="at/below threshold" />
+            <StatTile label="Selected" value={selectedIds.length} icon="shoppingCart" color="purple" sublabel="in this order" />
+          </div>
+
+          {/* Search + primary filters */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name or generic name…"
+                className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+              />
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {REORDER_FILTERS.map((f) => {
+                const count =
+                  f.key === 'all' ? items.length
+                    : f.key === 'out_of_stock' ? outOfStockCount
+                      : f.key === 'below_reorder' ? belowReorderCount
+                        : fastMovingCount
+                return (
+                  <button
+                    key={f.key}
+                    onClick={() => setFilter(f.key)}
+                    className={[
+                      'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors whitespace-nowrap',
+                      filter === f.key
+                        ? 'bg-[#1a6cbf] text-white'
+                        : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+                    ].join(' ')}
+                  >
+                    {f.label} ({count})
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Category filters */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[11px] text-gray-400 uppercase tracking-wider font-semibold">Type:</span>
+            {CATEGORY_FILTERS.map((c) => {
+              const count =
+                c.key === 'all'
+                  ? items.length
+                  : items.filter((i) => productType(i) === c.key).length
+              return (
+                <button
+                  key={c.key}
+                  onClick={() => setCategoryFilter(c.key)}
+                  className={[
+                    'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors whitespace-nowrap',
+                    categoryFilter === c.key
+                      ? 'bg-[#1a6cbf] text-white'
+                      : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+                  ].join(' ')}
+                >
+                  {c.label} ({count})
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Action bar */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <button
+                onClick={selectAllVisible}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center gap-1.5"
+              >
+                <Icon name="check" size={13} /> Select All
+              </button>
+              <button
+                onClick={clearSelection}
+                disabled={selectedIds.length === 0}
+                className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center gap-1.5 disabled:opacity-40"
+              >
+                <Icon name="x" size={13} /> Clear Selection
+              </button>
+            </div>
+          </div>
+
+          {/* Table */}
+          <div className="overflow-x-auto max-h-[50vh] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700/60">
+            <table className="w-full">
+              <thead className="sticky top-0 z-10">
+                <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/80">
+                  <Th align="center">✓</Th>
+                  <Th>Item</Th>
+                  <Th align="right" className="hidden sm:table-cell">Stock</Th>
+                  <Th align="right" className="hidden md:table-cell">Reorder</Th>
+                  <Th align="right" className="hidden lg:table-cell">Monthly Usage</Th>
+                  <Th align="center">Status</Th>
+                  <Th align="right">Order Qty</Th>
+                  <Th>Unit</Th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
+                {filtered.map((item) => {
+                  const isSelected = !!selected[item.id]
+                  const st = statusFor(item)
+                  const fast = isFastMoving(item)
+                  const suggestion = suggestOrderQty(item)
+                  return (
+                    <tr key={item.id} className={isSelected ? 'bg-blue-50/40 dark:bg-blue-950/20' : 'hover:bg-gray-50/50 dark:hover:bg-gray-700/20'}>
+                      <td className="px-4 py-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(item)}
+                          className="w-4 h-4 rounded border-gray-300 text-[#1a6cbf] focus:ring-[#1a6cbf]/40 cursor-pointer"
+                          aria-label={`Select ${item.name}`}
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{item.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                          <Badge className={CATEGORY_BADGES[item.category] || CATEGORY_BADGES.other}>{cap(item.category)}</Badge>
+                          {item.generic_name && (
+                            <span className="text-[10px] text-gray-400">{item.generic_name}</span>
+                          )}
+                          {fast && (
+                            <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Fast</Badge>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-right text-[12px] text-gray-700 dark:text-gray-300 tabular-nums whitespace-nowrap hidden sm:table-cell">
+                        {item.current_stock}
+                      </td>
+                      <td className="px-4 py-3 text-right text-[12px] text-gray-600 dark:text-gray-300 tabular-nums whitespace-nowrap hidden md:table-cell">
+                        {item.reorder_level}
+                      </td>
+                      <td className="px-4 py-3 text-right text-[12px] text-gray-600 dark:text-gray-300 tabular-nums whitespace-nowrap hidden lg:table-cell">
+                        {item.monthly_usage ?? '—'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <Badge className={st.cls}>{st.label}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <input
+                          type="number"
+                          min="0"
+                          value={selected[item.id]?.qty ?? ''}
+                          onChange={(e) => {
+                            if (!isSelected) toggleSelect(item)
+                            setQty(item.id, e.target.value)
+                          }}
+                          placeholder={String(suggestion)}
+                          className="w-20 px-2 py-1 text-right text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 tabular-nums focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+                        />
+                      </td>
+                      <td className="px-4 py-3">
+                        <select
+                          value={selected[item.id]?.unit ?? item.unit ?? 'pieces'}
+                          onChange={(e) => {
+                            if (!isSelected) toggleSelect(item)
+                            setUnit(item.id, e.target.value)
+                          }}
+                          className="px-2 py-1 text-[12px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+                        >
+                          <option value={selected[item.id]?.unit ?? item.unit ?? 'pieces'}>
+                            {selected[item.id]?.unit ?? item.unit ?? 'pieces'}
+                          </option>
+                          {COMMON_UNITS.filter((u) => u !== (selected[item.id]?.unit ?? item.unit ?? 'pieces')).map((u) => (
+                            <option key={u} value={u}>{u}</option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {filtered.length === 0 && (
+            <EmptyState
+              icon="box"
+              title="No products match"
+              description={search || filter !== 'all' || categoryFilter !== 'all' ? 'Try adjusting your filters.' : 'Products will appear here once added.'}
+            />
+          )}
+
+          <p className="text-[11px] text-gray-400">
+            Suggested order quantity = max(reorder×2 − stock, monthly usage×2 − stock, reorder level).
+            Different units can't be summed, so no total quantity is shown.
+          </p>
+        </div>
+      </ModalShell>
+
+      {showOrderModal && orderItems.length > 0 && (
+        <CreateOrderModal
+          items={orderItems}
+          onClose={() => setShowOrderModal(false)}
+          onDone={() => {
+            setShowOrderModal(false)
+            clearSelection()
+          }}
+        />
+      )}
+    </>
+  )
+}
+
+// ─── CreateOrderModal (PDF export) ──────────────────────────────
+function CreateOrderModal({ items, onClose, onDone }) {
+  function buildDoc() {
+    const doc = new jsPDF()
+    doc.setFont('helvetica', 'normal')
+
+    const pageWidth = doc.internal.pageSize.getWidth()
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    doc.text('Purchase Order', 14, 18)
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'normal')
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 26)
+    doc.text(`Total items: ${items.length}`, 14, 32)
+    doc.text(`Clinic: City Health Clinic`, pageWidth - 14, 26, { align: 'right' })
+    doc.text(`Status: For Review`, pageWidth - 14, 32, { align: 'right' })
+
+    const body = items.map((it, i) => [
+      String(i + 1),
+      it.name + (it.generic_name ? `\n${it.generic_name}` : ''),
+      cap(it.category || 'general'),
+      String(it.current_stock),
+      String(it.orderQty),
+      it.orderUnit,
+    ])
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['#', 'Item', 'Category', 'Current Stock', 'Order Qty', 'Unit']],
+      body,
+      showHead: 'firstPage',
+      styles: { font: 'helvetica', fontSize: 9, cellPadding: 2.5, overflow: 'linebreak' },
+      headStyles: { fillColor: [26, 108, 191], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [245, 248, 252] },
+      columnStyles: {
+        0: { cellWidth: 12, halign: 'right' },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 28 },
+        3: { cellWidth: 30, halign: 'right' },
+        4: { cellWidth: 24, halign: 'right' },
+        5: { cellWidth: 24 },
+      },
+      margin: { left: 14, right: 14, bottom: 18 },
+    })
+
+    const pageCount = doc.internal.getNumberOfPages()
+    const pageHeight = doc.internal.pageSize.getHeight()
+    for (let i = 1; i <= pageCount; i++) {
+      doc.setPage(i)
+      doc.setFontSize(8)
+      doc.setFont('helvetica', 'normal')
+      doc.text(
+        `Page ${i} of ${pageCount}`,
+        pageWidth - 14,
+        pageHeight - 8,
+        { align: 'right' }
+      )
+      doc.text('City Health Clinic · Purchase Order', 14, pageHeight - 8)
+    }
+
+    return doc
+  }
+
+  function handleDownload() {
+    try {
+      const doc = buildDoc()
+      const filename = `purchase-order-${new Date().toISOString().slice(0, 10)}-${Date.now().toString().slice(-6)}.pdf`
+      doc.save(filename)
+      toast.success(`Purchase order downloaded (${items.length} items)`)
+      onDone?.()
+    } catch (err) {
+      toast.error(err?.message || 'Could not generate PDF')
+    }
+  }
+
+  function handlePrintPreview() {
+    try {
+      const doc = buildDoc()
+      const url = doc.output('bloburl')
+      const w = window.open(url, '_blank')
+      if (!w) {
+        toast.error('Popup blocked — please allow popups to preview the PDF.')
+        return
+      }
+      toast.success('PDF opened in a new tab — use Ctrl/Cmd+P to print.')
+    } catch (err) {
+      toast.error(err?.message || 'Could not preview PDF')
+    }
+  }
+
+  return (
+    <ModalShell
+      title="Create Purchase Order"
+      subtitle={`${items.length} item${items.length === 1 ? '' : 's'} selected`}
+      onClose={onClose}
+      maxWidth="max-w-2xl"
+      footer={
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400"
+          >
+            Close
+          </button>
+          <button
+            onClick={handlePrintPreview}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 flex items-center gap-2"
+          >
+            <Icon name="printer" size={14} /> Print Preview
+          </button>
+          <button
+            onClick={handleDownload}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2"
+          >
+            <Icon name="download" size={14} /> Download PDF
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-3">
+        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-start gap-2">
+          <Icon name="info" size={14} className="text-[#1a6cbf] dark:text-blue-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-gray-600 dark:text-gray-300">
+            The PDF will be downloaded automatically (no print dialog). Use <strong>Print Preview</strong> to inspect first.
+            Different units can't be summed, so no total quantity row is included.
+          </p>
+        </div>
+
+        <div className="overflow-x-auto max-h-[55vh] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700/60">
+          <table className="w-full text-[12px]">
+            <thead className="sticky top-0 z-10">
+              <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/80">
+                <Th>#</Th>
+                <Th>Item</Th>
+                <Th align="left" className="hidden sm:table-cell">Category</Th>
+                <Th align="right">Stock</Th>
+                <Th align="right">Qty</Th>
+                <Th>Unit</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
+              {items.map((it, i) => (
+                <tr key={it.id}>
+                  <td className="px-4 py-2 text-gray-400 tabular-nums">{i + 1}</td>
+                  <td className="px-4 py-2 text-gray-900 dark:text-gray-100">
+                    <p className="font-medium">{it.name}</p>
+                    {it.generic_name && (
+                      <p className="text-[10px] text-gray-400">{it.generic_name}</p>
+                    )}
+                  </td>
+                  <td className="px-4 py-2 hidden sm:table-cell">
+                    <Badge className={CATEGORY_BADGES[it.category] || CATEGORY_BADGES.other}>{cap(it.category)}</Badge>
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums text-gray-700 dark:text-gray-300">{it.current_stock}</td>
+                  <td className="px-4 py-2 text-right tabular-nums font-semibold text-[#1a6cbf] dark:text-blue-400">{it.orderQty}</td>
+                  <td className="px-4 py-2 text-gray-600 dark:text-gray-300">{it.orderUnit}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <p className="text-[11px] text-gray-400">
+          {items.length} item{items.length === 1 ? '' : 's'} will be included in the purchase order PDF.
+        </p>
+      </div>
     </ModalShell>
   )
 }

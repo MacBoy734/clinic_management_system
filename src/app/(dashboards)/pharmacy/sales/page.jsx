@@ -91,7 +91,7 @@ export default function OTCSalesTab() {
     staleTime: 15000,
   })
 
-    const isRefetching = salesQuery.isFetching
+  const isRefetching = salesQuery.isFetching
 
   const createSaleMutation = useMutation({
     mutationFn: (payload) => api.post('/api/pharmacy/otc-sales', payload),
@@ -159,7 +159,7 @@ export default function OTCSalesTab() {
           value={stats.total_sales} sublabel="transactions" />
       </div>
 
-            <div className="flex items-center justify-between gap-3">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Recent Sales</h3>
           <p className="text-[11px] text-gray-500 dark:text-gray-400">
@@ -172,10 +172,10 @@ export default function OTCSalesTab() {
             disabled={isRefetching}
             className="px-3 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
           >
-            <Icon 
-              name="refresh" 
-              size={13} 
-              className={isRefetching ? 'animate-spin' : ''} 
+            <Icon
+              name="refresh"
+              size={13}
+              className={isRefetching ? 'animate-spin' : ''}
             />
             {isRefetching ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -304,10 +304,10 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const [showDropdown, setShowDropdown] = useState(false)
   const [selectedProduct, setSelectedProduct] = useState(null)
   const [selectedTier, setSelectedTier] = useState(null)
-  const [quantity, setQuantity] = useState(1)
+  const [quantity, setQuantity] = useState('1')
   const [cart, setCart] = useState([])
 
-  const [discountAmount, setDiscountAmount] = useState(0)
+  const [discountAmount, setDiscountAmount] = useState('')
   const [discountReason, setDiscountReason] = useState('')
 
   const [paymentLines, setPaymentLines] = useState([
@@ -345,6 +345,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
 
+
   // ── DERIVED STATE ────────────────────────────────────────────────
   const products = productsQuery.data?.items || []
   const customers = customersQuery.data?.customers || []
@@ -376,11 +377,22 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       ? selectedProduct[PRICE_TIERS.find((t) => t.key === selectedTier).priceField] || 0
       : 0
 
-  const lineSubtotal = (selectedPrice || 0) * (quantity || 0)
+  const lineSubtotal = (selectedPrice || 0) * (quantity === '' ? 0 : parseInt(quantity, 10) || 0)
 
   const cartSubtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
-  const disc = Math.max(0, parseInt(discountAmount) || 0)
+  const disc = discountAmount === '' ? 0 : Math.max(0, parseInt(discountAmount) || 0)
   const cartTotal = Math.max(0, cartSubtotal - disc)
+
+  useEffect(() => {
+    if (paymentLines.length === 1 && cartTotal > 0) {
+      const line = paymentLines[0]
+      if (line.amount === '' || line.amount === '0') {
+        setPaymentLines((prev) =>
+          prev.map((p) => (p.uid === line.uid ? { ...p, amount: String(cartTotal) } : p))
+        )
+      }
+    }
+  }, [cartTotal, paymentLines.length])
 
   const totalPaid = paymentLines.reduce((s, p) => s + (parseInt(p.amount) || 0), 0)
   const remaining = cartTotal - totalPaid
@@ -451,7 +463,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
         name: selectedProduct.name,
         category: selectedProduct.category,
         unit: selectedProduct.unit,
-        quantity: Number(quantity),
+        quantity: quantity === '' ? 1 : Math.max(1, parseInt(quantity, 10) || 1),
         unit_price: selectedPrice,
         price_tier: selectedTier,
       },
@@ -484,55 +496,55 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   }
 
   function handleSubmit(e) {
-  e.preventDefault()
+    e.preventDefault()
 
-  // ── Keep your existing manual UX guards ─────────────────────────────
-  if (!cart.length) {
-    toast.error('Add at least one item to the sale')
-    return
-  }
-  if (disc > 0 && !discountReason.trim()) {
-    toast.error('A reason is required for every discount')
-    return
-  }
-  if (remaining !== 0) {
-    toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
-    return
-  }
-  if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
-    toast.error('Credit sales require a customer name and phone')
-    return
-  }
+    // ── Keep your existing manual UX guards ─────────────────────────────
+    if (!cart.length) {
+      toast.error('Add at least one item to the sale')
+      return
+    }
+    if (disc > 0 && !discountReason.trim()) {
+      toast.error('A reason is required for every discount')
+      return
+    }
+    if (remaining !== 0) {
+      toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
+      return
+    }
+    if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
+      toast.error('Credit sales require a customer name and phone')
+      return
+    }
 
-  // ── Build a schema-safe payload ─────────────────────────────────────
-  const payload = {
-    customer_name: customerName.trim() || undefined,  // let Zod apply 'Walk-in Customer' default
-    customer_phone: hasCredit ? customerPhone.trim() : null,
-    discount_amount: disc,
-    discount_reason: disc > 0 ? discountReason.trim() : null,
-    payments: paymentLines.map((p) => ({
-      method: p.method,
-      amount: Math.max(0, Math.round(Number(p.amount) || 0)),  // Money = int ≥ 0
-      reference: p.reference?.trim() || null,
-    })),
-    items: cart.map((i) => ({
-      product_id: i.product_id,
-      name: i.name,
-      quantity: Math.max(1, Math.round(Number(i.quantity) || 1)),  // PositiveQuantity
-      unit_price: Math.max(0, Math.round(Number(i.unit_price) || 0)),  // Money
-      price_tier: i.price_tier,
-    })),
-  }
+    // ── Build a schema-safe payload ─────────────────────────────────────
+    const payload = {
+      customer_name: customerName.trim() || undefined,  // let Zod apply 'Walk-in Customer' default
+      customer_phone: hasCredit ? customerPhone.trim() : null,
+      discount_amount: disc,
+      discount_reason: disc > 0 ? discountReason.trim() : null,
+      payments: paymentLines.map((p) => ({
+        method: p.method,
+        amount: Math.max(0, Math.round(Number(p.amount) || 0)),  // Money = int ≥ 0
+        reference: p.reference?.trim() || null,
+      })),
+      items: cart.map((i) => ({
+        product_id: i.product_id,
+        name: i.name,
+        quantity: Math.max(1, Math.round(Number(i.quantity) || 1)),  // PositiveQuantity
+        unit_price: Math.max(0, Math.round(Number(i.unit_price) || 0)),  // Money
+        price_tier: i.price_tier,
+      })),
+    }
 
-  // ── Validate before the API ever sees it ────────────────────────────
-  const parsed = createOtcSaleSchema.safeParse(payload)
-  if (!parsed.success) {
-    toast.error(parsed.error.errors[0].message)
-    return
-  }
+    // ── Validate before the API ever sees it ────────────────────────────
+    const parsed = createOtcSaleSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
 
-  onComplete(parsed.data)
-}
+    onComplete(parsed.data)
+  }
 
   // ── RENDER ───────────────────────────────────────────────────────
   return (
@@ -830,7 +842,17 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                       min={1}
                       max={Math.max(1, selectedProduct.current_stock - inCartFor(selectedProduct.id))}
                       value={quantity}
-                      onChange={(e) => setQuantity(Math.max(1, Number(e.target.value) || 1))}
+                      onChange={(e) => {
+                        const val = e.target.value
+                        if (val === '') {
+                          setQuantity('')
+                        } else {
+                          const num = parseInt(val, 10)
+                          if (!isNaN(num)) {
+                            setQuantity(String(num))
+                          }
+                        }
+                      }}
                       className="w-full h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
                     />
                   </div>
@@ -929,8 +951,14 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                     min={0}
                     max={cartSubtotal}
                     value={discountAmount}
-                    onChange={(e) => setDiscountAmount(Math.max(0, Math.min(cartSubtotal, Number(e.target.value) || 0)))}
-                    placeholder="0"
+                    onChange={(e) => {
+                      const val = e.target.value
+                      if (val === '') {
+                        setDiscountAmount('')
+                      } else {
+                        setDiscountAmount(String(Math.max(0, Math.min(cartSubtotal, Number(val) || 0))))
+                      }
+                    }} placeholder="0"
                     className="w-full h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
                   />
                 </div>
@@ -1114,129 +1142,153 @@ function ReceiptModal({ sale, soldBy, onClose }) {
   const clinic = profileQuery.data?.settings || {}
 
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 print:bg-white print:p-0 print:block"
-      onClick={onClose}
-    >
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          .print-area, .print-area * { visibility: visible !important; }
-          .print-area {
-            position: absolute !important;
-            top: 0; left: 0;
-            width: 100%;
-            max-height: none !important;
-            overflow: visible !important;
-          }
-          .no-print { display: none !important; }
-        }
-      `}</style>
+    <>
+      <style dangerouslySetInnerHTML={{
+        __html: `
+  @media print {
+    @page { size: 80mm auto; margin: 0; }
 
-      <div
-        className="relative bg-white text-black w-80 max-h-[90vh] overflow-y-auto rounded-lg print:w-full print:max-h-none print:rounded-none"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="p-6 print-area">
-          <div className="text-center border-b border-dashed border-gray-300 pb-3 mb-3">
-            <h2 className="text-[15px] font-bold tracking-tight">{clinic.name || 'Clinic'}</h2>
-            {clinic.tagline && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.tagline}</p>}
-            {clinic.address && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.address}</p>}
-            {clinic.phone && <p className="text-[10px] text-gray-600">Tel: {clinic.phone}</p>}
-            {clinic.email && <p className="text-[10px] text-gray-600">{clinic.email}</p>}
-          </div>
+    body * { visibility: hidden !important; }
+    #receipt-print, #receipt-print * { visibility: visible !important; }
 
-          <div className="text-center mb-3">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">
-              Sales Receipt
-            </p>
-            <p className="text-[14px] font-bold text-black mt-0.5">{sale.receipt_number}</p>
-          </div>
+    #receipt-wrapper {
+      position: static !important;
+      width: 80mm !important;
+      max-width: 80mm !important;
+      max-height: none !important;
+      overflow: visible !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      background: white !important;
+    }
 
-          <div className="text-[11px] text-gray-700 space-y-0.5 mb-3">
-            <div className="flex justify-between">
-              <span className="text-gray-500">Date:</span>
-              <span className="font-medium">{formatDateTime(sale.sold_at)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Customer:</span>
-              <span className="font-medium">{sale.customer_name}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Payment:</span>
-              <span className="font-medium uppercase">{sale.payment_method}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Served by:</span>
-              <span className="font-medium">{sale.sold_by || soldBy}</span>
-            </div>
-          </div>
+    #receipt-print {
+      position: absolute !important;
+      left: 4mm !important;           /* centers 72 mm inside 80 mm page */
+      top: 0 !important;
+      width: 72mm !important;         /* fits inside 72.1 mm printable area */
+      max-width: 72mm !important;
+      padding: 1mm 2mm !important;    /* internal breathing room */
+      box-sizing: border-box !important;
+      transform: none !important;
+      margin: 0 !important;
+      border: none !important;
+      border-radius: 0 !important;
+      background: white !important;
+      color: black !important;
+    }
 
-          {/* Items */}
-          <div className="border-t border-dashed border-gray-300 pt-3 mb-3">
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
-              Items
-            </p>
-            <div className="space-y-1.5">
-              {items.map((item, i) => (
-                <div key={i} className="flex justify-between text-[11px]">
-                  <span className="flex-1 pr-2">
-                    {item.name} × {item.quantity}
-                  </span>
-                  <span className="tabular-nums font-medium">
-                    {formatMoney(item.unit_price * item.quantity)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
+    .no-print { display: none !important; }
+  }
+`}} />
 
-          {/* Totals */}
-          <div className="border-t-2 border-black pt-3 space-y-1">
-            <div className="flex justify-between text-[11px] text-gray-600">
-              <span>Subtotal</span>
-              <span className="tabular-nums">{formatMoney(subtotal)}</span>
+      <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+        <div
+          id="receipt-wrapper"
+          className="relative bg-white text-black w-80 max-h-[90vh] overflow-y-auto rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div id="receipt-print" className="p-6">
+            <div className="text-center border-b border-dashed border-gray-300 pb-3 mb-3">
+              <h2 className="text-[15px] font-bold tracking-tight">{clinic.name || 'Clinic'}</h2>
+              {clinic.tagline && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.tagline}</p>}
+              {clinic.address && <p className="text-[10px] text-gray-600 mt-0.5">{clinic.address}</p>}
+              {clinic.phone && <p className="text-[10px] text-gray-600">Tel: {clinic.phone}</p>}
+              {clinic.email && <p className="text-[10px] text-gray-600">{clinic.email}</p>}
             </div>
-            {discount > 0 && (
-              <div className="flex justify-between text-[11px] text-red-600">
-                <span>Discount</span>
-                <span className="tabular-nums">-{formatMoney(discount)}</span>
+
+            <div className="text-center mb-3">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500">
+                Sales Receipt
+              </p>
+              <p className="text-[14px] font-bold text-black mt-0.5">{sale.receipt_number}</p>
+            </div>
+
+            <div className="text-[11px] text-gray-700 space-y-0.5 mb-3">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Date:</span>
+                <span className="font-medium">{formatDateTime(sale.sold_at)}</span>
               </div>
-            )}
-            {taxTotal > 0 && (
+              <div className="flex justify-between">
+                <span className="text-gray-500">Customer:</span>
+                <span className="font-medium">{sale.customer_name}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Payment:</span>
+                <span className="font-medium uppercase">{sale.payment_method}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500">Served by:</span>
+                <span className="font-medium">{sale.sold_by || soldBy}</span>
+              </div>
+            </div>
+
+            <div className="border-t border-dashed border-gray-300 pt-3 mb-3">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-2">
+                Items
+              </p>
+              <div className="space-y-1.5">
+                {items.map((item, i) => (
+                  <div key={i} className="flex justify-between text-[11px]">
+                    <span className="flex-1 pr-2">
+                      {item.name} × {item.quantity}
+                    </span>
+                    <span className="tabular-nums font-medium">
+                      {formatMoney(item.unit_price * item.quantity)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="border-t-2 border-black pt-3 space-y-1">
               <div className="flex justify-between text-[11px] text-gray-600">
-                <span>Tax</span>
-                <span className="tabular-nums">{formatMoney(taxTotal)}</span>
+                <span>Subtotal</span>
+                <span className="tabular-nums">{formatMoney(subtotal)}</span>
               </div>
-            )}
-            <div className="flex justify-between items-center pt-1 border-t border-gray-300">
-              <span className="text-[12px] font-bold uppercase tracking-widest">Total</span>
-              <span className="text-[16px] font-bold tabular-nums">{formatMoney(total)}</span>
+              {discount > 0 && (
+                <div className="flex justify-between text-[11px] text-red-600">
+                  <span>Discount</span>
+                  <span className="tabular-nums">-{formatMoney(discount)}</span>
+                </div>
+              )}
+              {taxTotal > 0 && (
+                <div className="flex justify-between text-[11px] text-gray-600">
+                  <span>Tax</span>
+                  <span className="tabular-nums">{formatMoney(taxTotal)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-center pt-1 border-t border-gray-300">
+                <span className="text-[12px] font-bold uppercase tracking-widest">Total</span>
+                <span className="text-[16px] font-bold tabular-nums">{formatMoney(total)}</span>
+              </div>
+            </div>
+
+            <div className="text-center mt-4 pt-3 border-t border-dashed border-gray-300">
+              <p className="text-[10px] text-gray-600">Thank you for shopping with us.</p>
+              <p className="text-[10px] text-gray-600 mt-0.5">Keep this receipt for returns and exchanges.</p>
+              <p className="text-[9px] text-gray-400 mt-1.5">Computer-generated receipt.</p>
             </div>
           </div>
 
-          <div className="text-center mt-4 pt-3 border-t border-dashed border-gray-300">
-            <p className="text-[10px] text-gray-600">Thank you for shopping with us.</p>
-            <p className="text-[10px] text-gray-600 mt-0.5">Keep this receipt for returns and exchanges.</p>
-            <p className="text-[9px] text-gray-400 mt-1.5">Computer-generated receipt.</p>
+          <div className="p-4 border-t border-gray-200 flex gap-2 no-print">
+            <button
+              onClick={() => window.print()}
+              className="flex-1 h-9 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center justify-center gap-1.5"
+            >
+              <Icon name="printer" size={14} /> Print Receipt
+            </button>
+            <button
+              onClick={onClose}
+              className="px-4 h-9 rounded-lg text-[13px] font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-1.5"
+            >
+              <Icon name="x" size={14} /> Close
+            </button>
           </div>
-        </div>
-
-        <div className="p-4 border-t border-gray-200 flex gap-2 no-print">
-          <button
-            onClick={() => window.print()}
-            className="flex-1 h-9 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center justify-center gap-1.5"
-          >
-            <Icon name="printer" size={14} /> Print Receipt
-          </button>
-          <button
-            onClick={onClose}
-            className="px-4 h-9 rounded-lg text-[13px] font-medium bg-white border border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-1.5"
-          >
-            <Icon name="x" size={14} /> Close
-          </button>
         </div>
       </div>
-    </div>
+    </>
   )
 }

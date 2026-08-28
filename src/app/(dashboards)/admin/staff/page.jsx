@@ -279,8 +279,8 @@ function ConfirmModal({ staff, action, onConfirm, onClose, isLoading }) {
         </h3>
         <p className="text-[13px] text-gray-500 dark:text-gray-400 mb-5 leading-relaxed">
           {isDeactivating
-            ? `${staff.name} will no longer be able to log in. Their data and history will be preserved.`
-            : `${staff.name} will be able to log in again with their existing password.`}
+            ? `${staff.username} will no longer be able to log in. Their data and history will be preserved.`
+            : `${staff.username} will be able to log in again with their existing password.`}
         </p>
         <div className="flex gap-2">
           <button onClick={onClose}
@@ -408,22 +408,6 @@ export default function StaffPage() {
             + Add Staff
           </button>
         </div>
-      </div>
-      
-      {/* ── Page header ── */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">
-            Staff Management
-          </h2>
-        </div>
-        <button
-          onClick={() => setModal('add')}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-semibold
-                     text-white transition-colors
-                     bg-[#0c2340] hover:bg-[#0f2d52] dark:bg-blue-700 dark:hover:bg-blue-600">
-          + Add Staff
-        </button>
       </div>
 
       {/* ── Error banner ── */}

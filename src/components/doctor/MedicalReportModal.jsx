@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
 import { Icon, formatDate, formatTime, cap, Spinner } from '@/utils/helpers'
 import { evaluateField } from '@/utils/labResult'
+import Image from 'next/image'
 
 // Fallbacks used only when clinic settings haven't loaded or a field is missing.
 const FALLBACK = {
@@ -15,7 +16,7 @@ const FALLBACK = {
   address: 'Kitui Town, Kitui County, Kenya',
   tel: '0721532841 / 0114367561',
   motto: 'We Listen, We Care; your Health is our Concern',
-  logo: '/clinic-logo.png',
+  logo: '/images/logo.png',
 }
 
 const BLUE = '#2e7dd1'
@@ -273,9 +274,11 @@ export function MedicalReportModal({ visitId, onClose }) {
                         style={{ background: BLUE, borderRadius: '0 0 100% 100% / 0 0 14px 14px' }}
                       />
                       <div className="text-center pt-3 px-8">
-                        <img
+                        <Image
                           src={letterhead.logo}
                           alt=""
+                          width={100}
+                          height={100}
                           className="h-16 mx-auto mb-1"
                           onError={(e) => { e.currentTarget.style.display = 'none' }}
                         />

@@ -50,18 +50,43 @@ export function ReceiptModal({ bill, onClose }) {
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: `
-        @media print {
-          body * { visibility: hidden !important; }
-          #receipt-print, #receipt-print * { visibility: visible !important; }
-          #receipt-print { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; max-width: none !important; margin: 0 !important; padding: 20px !important; box-shadow: none !important; border: none !important; border-radius: 0 !important; }
-          .no-print { display: none !important; }
-          @page { margin: 1.5cm; }
-        }
-      `}} />
+  @media print {
+    body * { visibility: hidden !important; }
+    #receipt-print, #receipt-print * { visibility: visible !important; }
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 no-print" onClick={() => !printing && onClose()}>
-        <div className="relative w-full max-w-lg max-h-[92vh] flex flex-col rounded-xl bg-white text-gray-900 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-          {/* Header */}
+    #receipt-wrapper {
+      position: static !important;
+      max-width: none !important;
+      max-height: none !important;
+      overflow: visible !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      background: transparent !important;
+    }
+
+    #receipt-print {
+      position: absolute !important;
+      left: 0 !important;
+      top: 0 !important;
+      width: 100% !important;
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 20px !important;
+      box-shadow: none !important;
+      border: none !important;
+      border-radius: 0 !important;
+      background: white !important;
+    }
+
+    .no-print { display: none !important; }
+    @page { margin: 1.5cm; }
+  }
+`}} />
+
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !printing && onClose()}>
+<div id="receipt-wrapper" className="relative w-full max-w-lg max-h-[92vh] flex flex-col rounded-xl bg-white text-gray-900 shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>          {/* Header */}
           <div className="no-print flex items-center justify-between px-5 py-3 border-b border-gray-200 bg-gray-50">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center"><Icon name="receipt" size={16} /></div>

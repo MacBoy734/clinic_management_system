@@ -12,7 +12,7 @@ import { useRouter } from 'next/navigation'
 import api from '@/lib/api'
 import {
   StatCard, SkeletonCard, SkeletonList, ErrorState, EmptyState,
-  Card, Badge, Icon, badgeClass, cap, waitMinutes, formatTime, VISIT_TYPES, timeAgoShort
+  Card, Badge, Icon, badgeClass, cap, waitMinutes, formatTime, VISIT_TYPES, timeAgo
 } from '@/utils/helpers'
 import { useAuthStore } from '@/store/authStore'
 import socket from '@/lib/socket'
@@ -229,7 +229,7 @@ export default function QueueTab({ onStartConsultation }) {
                   <div className="text-right shrink-0 hidden sm:block">
                     <div className="flex items-center gap-1.5 justify-end">
                       <span className={`w-1.5 h-1.5 rounded-full ${waitDot}`} />
-                      <p className={`text-[13px] font-semibold tabular-nums ${waitColor}`}>{wait} min</p>
+                      <p className={`text-[13px] font-semibold tabular-nums ${waitColor}`}>{timeAgo(v.arrived_at)}</p>
                     </div>
                     <p className="text-[10px] text-gray-400">{formatTime(v.arrived_at)}</p>
                   </div>

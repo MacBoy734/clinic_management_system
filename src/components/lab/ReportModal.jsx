@@ -1,46 +1,23 @@
 'use client'
 
-// ReportModal — printable lab report replicating the clinic's original
-// Access-printed letterhead (Kitui Royal Diagnostic Centre).
-//
-// MULTI-PAGE STRATEGY — running header/footer:
-//   The printable region is a single-column <table>.
-//     <thead> = letterhead   → browser REPEATS it on every printed page
-//     <tfoot> = motto bar     → browser REPEATS it on every printed page
-//     <tbody> = patient block (page 1) + test blocks + signatures → flows/paginates
-//   Because thead/tfoot are real table sections, the print engine reserves
-//   their height on each page, so body text never overlaps the footer and
-//   every continuation page carries the masthead. No position:fixed, no
-//   manual spacers.
-//
-//   Break rules (see @media print):
-//     - a test block starts on the current page and continues onto the next
-//       when too tall; splits fall BETWEEN rows, never through one
-//     - a TEST/section bar never lands alone at the bottom (no orphan header)
-//   To force one-test-per-page (original pad style) instead of continuous
-//   flow: change `.report-test-block` to `break-before: page`.
-//
-// BODY IS TEMPLATE-DRIVEN: iterates item.catalog.result_template.sections
-// (the SAME shape ResultsModal writes), rendering values from
-// item.result_data. One component reproduces all 91 legacy report layouts.
-//
-// REQUIRED ASSET: /public/clinic-logo.png (crop from a scanned report).
-// Missing logo degrades gracefully (image hidden, text header intact).
 
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { useQuery } from '@tanstack/react-query'
+import api from '@/lib/api'
 import { Icon, formatDate, formatTime } from '@/utils/helpers'
 import { evaluateField } from '@/utils/labResult'
+import Image from 'next/image'
 
 // Letterhead constants — move to ClinicSettings-backed config when the
 // admin SettingsTab is wired; values transcribed from the printed report.
-const LETTERHEAD = {
+const FALLBACK = {
   name: 'The Kitui Royal Diagnostic Centre',
   services: 'Lab Services, General Outpatient Services, Specialised Clinic, Ultra Sound Services.',
   email: 'thekituiroyaldiagnosticcentre@gmail.com',
   tel: '0721532841 / 0114367561',
   motto: 'We Listen, We Care; your Health is our Concern',
-  logo: '/clinic-logo.png',
+  logo: '/images/logo.png',
 }
 
 const BLUE = '#2e7dd1'
@@ -56,6 +33,24 @@ export function ReportModal({ request, onClose }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
+
+  const clinicQuery = useQuery({
+    queryKey: ['admin', 'settings', 'receipt'],
+    queryFn: () => api.get('/api/admin/settings'),
+    staleTime: 300000,
+  })
+
+  const clinic = clinicQuery.data?.settings || {}
+
+  const LETTERHEAD = {
+    name: clinic.name || FALLBACK.name,
+    services: clinic.services || FALLBACK.services,
+    email: clinic.email || FALLBACK.email,
+    tel: clinic.phone || FALLBACK.tel,
+    address: clinic.address || FALLBACK.address,
+    logo: FALLBACK.logo,
+    motto: clinic.tagline || FALLBACK.motto,
+  }
 
   // Saved-PDF filename = report id, not the app title
   const handlePrint = () => {
@@ -184,9 +179,11 @@ export function ReportModal({ request, onClose }) {
                     />
                     {/* Masthead */}
                     <div className="text-center pt-3 px-8">
-                      <img
+                      <Image
                         src={LETTERHEAD.logo}
                         alt=""
+                        width={100}
+                        height={100}
                         className="h-16 mx-auto mb-1"
                         onError={(e) => { e.currentTarget.style.display = 'none' }}
                       />
@@ -244,26 +241,31 @@ export function ReportModal({ request, onClose }) {
                     </div>
 
                     {/* Patient block (page 1) */}
-                    <div className="mt-3 max-w-xl text-[13px]">
-                      <div className="grid grid-cols-[150px_1fr]">
-                        <div className="text-right pr-2 py-1 font-bold">Patient's Name:</div>
-                        <div className="border border-gray-400 px-2 py-1 uppercase">{request.patient_name || ''}</div>
+                    <div className="mt-3 w-full text-[13px] flex flex-row gap-10 items-center justify-between">
+                      <div className='flex-1 min-w-0'>
+                        <div className="grid grid-cols-[150px_1fr]">
+                          <div className="text-right pr-2 py-1 font-bold">Patient's Name:</div>
+                          <div className="border border-gray-400 px-2 py-1 uppercase">{request.patient_name || ''}</div>
 
-                        <div className="text-right pr-2 py-1 font-bold">Age:</div>
-                        <div className="border border-gray-400 border-t-0 px-2 py-1">
-                          {request.patient_age != null ? `${request.patient_age} Year(s)` : 'Year(s)'}
+                          <div className="text-right pr-2 py-1 font-bold">Age:</div>
+                          <div className="border border-gray-400 border-t-0 px-2 py-1">
+                            {request.patient_age != null ? `${request.patient_age} ${request.age_unit}(s)` : 'Year(s)'}
+                          </div>
+
+                          <div className="text-right pr-2 py-1 font-bold">Gender:</div>
+                          <div className="border border-gray-400 border-t-0 px-2 py-1 flex items-center gap-6">
+                            <GenderOption label="Male" active={request.patient_gender === 'male'} />
+                            <GenderOption label="Female" active={request.patient_gender === 'female'} />
+                          </div>
                         </div>
 
-                        <div className="text-right pr-2 py-1 font-bold">Gender:</div>
-                        <div className="border border-gray-400 border-t-0 px-2 py-1 flex items-center gap-6">
-                          <GenderOption label="Male" active={request.patient_gender === 'male'} />
-                          <GenderOption label="Female" active={request.patient_gender === 'female'} />
+                        <div className="grid grid-cols-[150px_1fr] mt-3">
+                          <div className="text-right pr-2 py-1 font-bold">Requesting Dr:</div>
+                          <div className="border border-gray-400 px-2 py-1">{request.ordered_by || request.referred_by || ''}</div>
                         </div>
                       </div>
-
-                      <div className="grid grid-cols-[150px_1fr] mt-3">
-                        <div className="text-right pr-2 py-1 font-bold">Requesting Dr:</div>
-                        <div className="border border-gray-400 px-2 py-1">{request.ordered_by || request.referred_by || ''}</div>
+                      <div>
+                        <Image src={'/images/microscope.png'} width={130} height={130} onError={(e) => { e.currentTarget.style.display = 'none' }} alt="" />
                       </div>
                     </div>
 
@@ -379,8 +381,8 @@ function SectionBar({ title, showResults, showRef }) {
 // Flag colour per evaluation status. Low = amber (pure yellow is
 // illegible on white paper), high and qualitative-abnormal = red.
 const FLAG_CLASS = {
-  low:      'font-bold text-amber-600',
-  high:     'font-bold text-red-700',
+  low: 'font-bold text-amber-600',
+  high: 'font-bold text-red-700',
   abnormal: 'font-bold text-red-700',
 }
 
