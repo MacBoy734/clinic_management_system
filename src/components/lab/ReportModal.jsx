@@ -61,7 +61,7 @@ export function ReportModal({ request, onClose }) {
   }
 
   const reportId = `LAB-${String(request.id).padStart(5, '0')}`
-  const patient = { gender: request.patient_gender, age: request.patient_age }
+  const patient = { gender: request.patient_gender, age: request.patient_age, age_unit: request.age_unit || 'years' }
 
   if (!mounted) return null
 
@@ -344,6 +344,7 @@ function TestBlock({ item, patient }) {
             section={section}
             index={si}
             values={item.result_data || {}}
+            applied={item.applied_ranges || {}}
             patient={patient}
           />
         ))
@@ -384,6 +385,8 @@ const FLAG_CLASS = {
   low: 'font-bold text-amber-600',
   high: 'font-bold text-red-700',
   abnormal: 'font-bold text-red-700',
+  critical_low: 'font-bold text-red-700 underline decoration-2',
+  critical_high: 'font-bold text-red-700 underline decoration-2',
 }
 
 function FieldRow({ label, display, status, refRange, showRef }) {
@@ -406,7 +409,7 @@ function FieldRow({ label, display, status, refRange, showRef }) {
 // sensitivity fields → antibiotic/result table
 // Fields render in template order — interleaved blocks preserved.
 // Ref column auto-enables when any field in the section resolves a range.
-function ReportSection({ section, index, values, patient }) {
+function ReportSection({ section, index, values, applied, patient }) {
   const fields = section.fields || []
   const hasInline = fields.some((f) => !['textarea', 'sensitivity'].includes(f.input_type))
   const title = section.title ? `${index + 1}. ${section.title}` : `${index + 1}.`
@@ -415,13 +418,21 @@ function ReportSection({ section, index, values, patient }) {
     if (['textarea', 'sensitivity'].includes(f.input_type)) return { f }
     const raw = values[f.key]
     const has = raw != null && raw !== ''
-    const { status, range } = evaluateField(f, raw, patient)
+    // Prefer the range stored at save time. Falling back to live resolution
+    // would use the patient's age *today* and the catalogue as it stands now.
+     // Evaluate against the band stored at result-entry time. Re-resolving live
+    // would use the patient's age today and the catalogue as it stands now —
+    // the colour could then disagree with the range printed beside it.
+    const snap = applied?.[f.key]
+    const ev = snap
+      ? evaluateField(f, raw, patient, { band: snap })
+      : evaluateField(f, raw, patient)
     return {
       f,
       raw,
       display: has ? `${raw}${f.unit ? ` ${f.unit}` : ''}` : '—',
-      status: has ? status : null,   // 'low' | 'high' | 'abnormal' | 'normal' | 'unknown'
-      range: range || f.reference_range || null,
+      status: has ? ev.status : null,
+      range: snap?.range || ev.range || null,
     }
   })
   const showRef = evaluated.some((e) => e.range)

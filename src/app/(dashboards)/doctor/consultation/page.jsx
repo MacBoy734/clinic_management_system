@@ -84,6 +84,7 @@ export default function ConsultationTab() {
   const [showReportModal, setShowReportModal] = useState(false)
   const [procedureFee, setProcedureFee] = useState('')
   const [editingProcedure, setEditingProcedure] = useState(false)
+  const [confirmEnd, setConfirmEnd] = useState(false)
   const searchParams = useSearchParams()
   const visitId = searchParams.get('visitId')
 
@@ -310,6 +311,7 @@ export default function ConsultationTab() {
 
     try {
       await patchMutation.mutateAsync(parsed.data)
+      setConfirmEnd(false)
       toast.success('Consultation completed — patient sent to billing')
     } catch (err) {
       return toast.error(err.message || 'Could not end consultation')
@@ -357,35 +359,35 @@ export default function ConsultationTab() {
     }
   }
 
- const handleAddPrescription = async (items) => {
-  const payload = {
-    items: items.map((it) => ({
-      medication: it.medication,
-      product_id: it.product_id,
-      drug_id: it.drug_id,
-      dosage: it.dosage,
-      frequency: it.frequency,
-      duration: it.duration,
-      quantity: Number(it.quantity),
-      unit_cost: Number(it.unit_cost),
-      form: it.form,
-    })),
-  }
+  const handleAddPrescription = async (items) => {
+    const payload = {
+      items: items.map((it) => ({
+        medication: it.medication,
+        product_id: it.product_id,
+        drug_id: it.drug_id,
+        dosage: it.dosage,
+        frequency: it.frequency,
+        duration: it.duration,
+        quantity: Number(it.quantity),
+        unit_cost: Number(it.unit_cost),
+        form: it.form,
+      })),
+    }
 
-  const parsed = createPrescriptionSchema.safeParse(payload)
-  if (!parsed.success) {
-    toast.error(parsed.error.errors[0].message)
-    return
-  }
+    const parsed = createPrescriptionSchema.safeParse(payload)
+    if (!parsed.success) {
+      toast.error(parsed.error.errors[0].message)
+      return
+    }
 
-  try {
-    await rxMutation.mutateAsync(parsed.data)
-    toast.success('Prescription sent to pharmacy')
-    setShowRxModal(false)
-  } catch (err) {
-    toast.error(err.message || 'Could not add prescription')
+    try {
+      await rxMutation.mutateAsync(parsed.data)
+      toast.success('Prescription sent to pharmacy')
+      setShowRxModal(false)
+    } catch (err) {
+      toast.error(err.message || 'Could not add prescription')
+    }
   }
-}
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -433,7 +435,7 @@ export default function ConsultationTab() {
     return n + r.items.filter((it) => it.status === 'ready' && (it.result || it.result_data)).length
   }, 0)
   const hasReadyLabs = readyLabsCount > 0
-  const patientForEval = { gender: visit.patient_gender, age: visit.patient_age }
+  const patientForEval = { gender: visit.patient_gender, age: visit.patient_age, age_unit: visit.age_unit || 'years' }
 
 
   // Single source of truth for why End Consultation is blocked (null = allowed)
@@ -442,7 +444,7 @@ export default function ConsultationTab() {
       ? `Cannot end — ${pendingLabsCount} lab test${pendingLabsCount > 1 ? 's are' : ' is'} still pending. Patient is at the lab.`
       : pendingRxCount > 0
         ? `Cannot end — ${pendingRxCount} medication${pendingRxCount > 1 ? 's are' : ' is'} pending at the pharmacy.`
-         : null
+        : null
 
   // The report only opens once the chart has medical content to print.
   const reportHasContent = !!(
@@ -862,7 +864,7 @@ export default function ConsultationTab() {
               {endBlockReason || 'All services complete — patient will be sent to BILLING for final payment.'}
             </p>
             <button
-              onClick={handleEndConsultation}
+              onClick={() => setConfirmEnd(true)}
               disabled={patchMutation.isPending || !!endBlockReason}
               title={endBlockReason || undefined}
               className="w-full px-4 py-2.5 rounded-lg text-[13px] font-semibold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -905,6 +907,19 @@ export default function ConsultationTab() {
         <MedicalReportModal
           visitId={visitId}
           onClose={() => setShowReportModal(false)}
+        />
+      )}
+      {confirmEnd && (
+        <EndConsultationModal
+          visit={visit}
+          soap={soap}
+          diagnosis={diagnosis}
+          diagnosisCode={diagnosisCode}
+          labRequests={labRequests}
+          prescriptions={prescriptions}
+          loading={patchMutation.isPending}
+          onClose={() => setConfirmEnd(false)}
+          onConfirm={handleEndConsultation}
         />
       )}
     </div>
@@ -1222,6 +1237,8 @@ const FLAG_TEXT = {
   low: 'font-bold text-amber-600 dark:text-amber-400',
   high: 'font-bold text-red-600 dark:text-red-400',
   abnormal: 'font-bold text-red-600 dark:text-red-400',
+  critical_low: 'font-bold text-red-700',
+  critical_high: 'font-bold text-red-700',
 }
 
 const ITEM_STATUS_BADGE = {
@@ -1299,7 +1316,6 @@ function LabOrdersList({ loading, requests, patient }) {
                       <p className="text-[10px] text-gray-400 mt-0.5">
                         {cap(it.category || 'uncategorised')}
                         {it.completed_at && ` · Completed ${formatDate(it.completed_at)} ${formatTime(it.completed_at)}`}
-                        {!it.completed_at && it.reference_range && ` · Ref: ${it.reference_range}`}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1323,6 +1339,7 @@ function LabOrdersList({ loading, requests, patient }) {
                               index={si}
                               sectionCount={it.result_template.sections.length}
                               values={it.result_data || {}}
+                              applied={it.applied_ranges || {}}
                               patient={patient}
                             />
                           ))}
@@ -1358,9 +1375,7 @@ function LabOrdersList({ loading, requests, patient }) {
   )
 }
 
-// One template section: number/select/radio/text → label|value|ref rows,
-// textarea → free-text block, sensitivity → antibiotic table.
-function ResultSection({ section, index, sectionCount, values, patient }) {
+function ResultSection({ section, index, sectionCount, values, applied, patient }) {
   const fields = section.fields || []
   const hasInline = fields.some((f) => !['textarea', 'sensitivity'].includes(f.input_type))
 
@@ -1368,12 +1383,15 @@ function ResultSection({ section, index, sectionCount, values, patient }) {
     if (['textarea', 'sensitivity'].includes(f.input_type)) return { f }
     const raw = values[f.key]
     const has = raw != null && raw !== ''
-    const { status, range } = evaluateField(f, raw, patient)
+    const snap = applied?.[f.key]
+    const ev = snap
+      ? evaluateField(f, raw, patient, { band: snap })
+      : evaluateField(f, raw, patient)
     return {
       f,
       display: has ? `${raw}${f.unit ? ` ${f.unit}` : ''}` : '—',
-      status: has ? status : null, // 'low' | 'high' | 'abnormal' | 'normal' | 'unknown'
-      range: range || f.reference_range || null,
+      status: has ? ev.status : null,
+      range: snap?.range || ev.range || null,
     }
   })
   const showRef = evaluated.some((e) => e.range)
@@ -1457,8 +1475,6 @@ function ResultSection({ section, index, sectionCount, values, patient }) {
 
 // ═══ Prescriptions ═════════════════════════════════════════════════════════════
 
-// Only issued (dispensed) medications can be returned to pharmacy.
-// Pending items haven't been dispensed yet — no stock movement to reverse.
 const RETURNABLE_ITEM_STATUSES = ['issued']
 
 const RETURN_REASON_SUGGESTIONS = [
@@ -1758,14 +1774,14 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
   const [selected, setSelected] = useState({}) // catalog id → true
   const [urgency, setUrgency] = useState('routine')
   const [search, setSearch] = useState('')
- 
+
   const { data, isLoading, error } = useQuery({
     queryKey: ['doctor', 'lab-catalog'],
     queryFn: () => api.get('/api/doctor/lab-catalog'),
     staleTime: 5 * 60 * 1000, // catalog rarely changes within a shift
   })
   const tests = data?.tests || []
- 
+
   // Tests already on this visit. Re-ordering one bills the patient twice, so
   // flag them rather than silently allowing a duplicate.
   const alreadyOrdered = new Map()
@@ -1774,7 +1790,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
       if (it.test_id != null) alreadyOrdered.set(it.test_id, it.status)
     }
   }
- 
+
   // Filtering only affects what is RENDERED. selected/total read from `tests`,
   // so a test picked before typing stays selected and stays in the total when
   // it filters out of view.
@@ -1786,13 +1802,13 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
     )
     : tests
   ).slice().sort((a, b) => (selected[b.id] ? 1 : 0) - (selected[a.id] ? 1 : 0))
- 
+
   const toggle = (t) => setSelected((s) => ({ ...s, [t.id]: !s[t.id] }))
   const selectedTests = tests.filter((t) => selected[t.id])
   const selectedIds = selectedTests.map((t) => t.id)
   const totalCost = selectedTests.reduce((s, t) => s + (t.unit_cost || 0), 0)
   const duplicateCount = selectedIds.filter((id) => alreadyOrdered.has(id)).length
- 
+
   const footer = (
     <div className="flex items-center justify-between gap-3">
       <div className="flex items-center gap-3">
@@ -1813,7 +1829,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
       </button>
     </div>
   )
- 
+
   return (
     <ModalShell
       title="Order Lab Tests"
@@ -1842,12 +1858,12 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
           ))}
         </div>
       </div>
- 
+
       {/* Test catalog */}
       <label className="block text-[11px] font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
         Available Tests
       </label>
- 
+
       {/* Search */}
       <div className="relative mb-2">
         <Icon name="search" size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -1870,7 +1886,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
           </button>
         )}
       </div>
- 
+
       {/* Selection stays live while filtered — say so, since selected tests
           can sit outside the current results. */}
       {q && selectedIds.length > 0 && (
@@ -1878,7 +1894,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
           {selectedIds.length} selected test{selectedIds.length !== 1 ? 's' : ''} kept while searching
         </p>
       )}
- 
+
       {duplicateCount > 0 && (
         <div className="mb-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
           <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
@@ -1887,7 +1903,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
           </p>
         </div>
       )}
- 
+
       {isLoading ? (
         <p className="text-[12px] text-gray-400 py-6 text-center">Loading test catalog…</p>
       ) : error ? (
@@ -1934,9 +1950,6 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
                     Already ordered · {cap(prevStatus)}
                   </p>
                 )}
-                {t.reference_range && (
-                  <p className="text-[10px] text-gray-400 mt-1.5">Ref: {t.reference_range}</p>
-                )}
               </button>
             )
           })}
@@ -1945,7 +1958,7 @@ function LabOrderModal({ onClose, onSubmit, loading, existingRequests = [] }) {
     </ModalShell>
   )
 }
- 
+
 
 // Drop-in replacement for PrescriptionModal + DrugSearchInput in ConsultationTab.jsx.
 // No new imports required.
@@ -2210,6 +2223,125 @@ function DrugSearchInput({ value, drugs, loading, error, onChange, onSelect }) {
           </p>
         </div>
       )}
+    </div>
+  )
+}
+
+
+function EndConsultationModal({
+  visit, soap, diagnosis, diagnosisCode, labRequests, prescriptions,
+  loading, onClose, onConfirm,
+}) {
+  const hasDiagnosis = !!diagnosis?.trim()
+
+  const unsaved = ['subjective', 'objective', 'assessment', 'plan']
+    .filter((k) => (soap[k]?.trim() || '') !== (visit[k]?.trim() || ''))
+  const diagnosisUnsaved =
+    (diagnosis?.trim() || '') !== (visit.diagnosis?.trim() || '') ||
+    (diagnosisCode?.trim() || '') !== (visit.diagnosis_code?.trim() || '')
+
+  const labCount = labRequests.reduce((n, r) => n + r.items.length, 0)
+  const rxCount = prescriptions.reduce((n, p) => n + p.items.length, 0)
+
+  const billLines = [
+    visit.consultation_fee > 0 && ['Consultation', visit.consultation_fee],
+    visit.lab_fee > 0 && ['Lab tests', visit.lab_fee],
+    visit.medication_fee > 0 && ['Medication', visit.medication_fee],
+    visit.procedure_fee > 0 && ['Procedure', visit.procedure_fee],
+  ].filter(Boolean)
+  const billTotal = billLines.reduce((s, [, amt]) => s + amt, 0)
+
+  return (
+    <ModalShell
+      title="End consultation"
+      subtitle={`${visit.patient_name} will be sent to billing`}
+      onClose={onClose}
+      maxWidth="max-w-md"
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={loading}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20 disabled:opacity-50"
+          >
+            Keep working
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={loading}
+            className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {loading
+              ? <Icon name="refresh" size={12} className="animate-spin" />
+              : <Icon name="check" size={12} />}
+            End consultation
+          </button>
+        </div>
+      }
+    >
+      {!hasDiagnosis && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2 mb-3">
+          <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">No diagnosis recorded.</span> The chart will close without one and you cannot add it afterwards from this screen.
+          </p>
+        </div>
+      )}
+
+      {(unsaved.length > 0 || diagnosisUnsaved) && (
+        <div className="rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 px-3 py-2 flex items-start gap-2 mb-3">
+          <Icon name="info" size={13} className="text-blue-600 dark:text-blue-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-blue-700 dark:text-blue-400">
+            Unsaved changes to{' '}
+            <span className="font-semibold">
+              {[...unsaved.map(cap), diagnosisUnsaved && 'Diagnosis'].filter(Boolean).join(', ')}
+            </span>{' '}
+            will be saved as part of this.
+          </p>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-100 dark:divide-gray-700/40 text-[12px]">
+        <SummaryRow label="Diagnosis" value={hasDiagnosis ? `${diagnosisCode ? `${diagnosisCode} · ` : ''}${diagnosis.trim()}` : 'Not recorded'} muted={!hasDiagnosis} />
+        <SummaryRow label="Lab tests" value={labCount > 0 ? `${labCount} ordered, all complete` : 'None'} muted={labCount === 0} />
+        <SummaryRow label="Prescriptions" value={rxCount > 0 ? `${rxCount} item${rxCount > 1 ? 's' : ''}` : 'None'} muted={rxCount === 0} />
+      </div>
+
+      {billTotal > 0 && (
+        <div className="mt-3 rounded-lg border border-gray-200 dark:border-gray-700/60 overflow-hidden">
+          <div className="px-3 py-1.5 bg-gray-50 dark:bg-gray-700/20">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">Bill so far</p>
+          </div>
+          <div className="divide-y divide-gray-100 dark:divide-gray-700/40">
+            {billLines.map(([label, amt]) => (
+              <div key={label} className="flex items-center justify-between px-3 py-1.5 text-[12px]">
+                <span className="text-gray-600 dark:text-gray-400">{label}</span>
+                <span className="tabular-nums text-gray-900 dark:text-gray-100">{formatMoney(amt)}</span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between px-3 py-1.5 text-[12px] font-semibold bg-gray-50 dark:bg-gray-700/20">
+              <span className="text-gray-700 dark:text-gray-200">Total</span>
+              <span className="tabular-nums text-gray-900 dark:text-gray-100">{formatMoney(billTotal)}</span>
+            </div>
+          </div>
+          <p className="px-3 py-1.5 text-[10px] text-gray-400 border-t border-gray-100 dark:border-gray-700/40">
+            Reception collects this. Amounts may change if fees are waived or discounted at billing.
+          </p>
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
+function SummaryRow({ label, value, muted }) {
+  return (
+    <div className="flex items-start justify-between gap-3 px-3 py-2">
+      <span className="text-gray-500 dark:text-gray-400 shrink-0">{label}</span>
+      <span className={`text-right ${muted ? 'text-gray-400 italic' : 'text-gray-900 dark:text-gray-100 font-medium'}`}>
+        {value}
+      </span>
     </div>
   )
 }

@@ -98,7 +98,7 @@ function getRange(preset, customStart, customEnd) {
     case 'custom': {
       const s = new Date(customStart)
       const e = new Date(customEnd)
-      if (isNaN(s.getTime()) || isNaN(e.getTime())) {
+      if (isNaN(s.getTime()) || isNaN(e.getTime()) || s > e) {
         start = end = new Date(today)
         days = 1
       } else {
@@ -144,11 +144,11 @@ function getCompareRange(current) {
 }
 
 function buildRangeQuery(range) {
-  const params = new URLSearchParams({ range: range.apiRange })
-  if (range.apiRange === 'custom') {
-    params.set('start', range.startISO)
-    params.set('end', range.endISO)
-  }
+  const params = new URLSearchParams({
+    range: 'custom',
+    start: range.startISO,
+    end: range.endISO,
+  })
   return params.toString()
 }
 
@@ -715,7 +715,7 @@ function PharmacySubTab({ range, compareRange, compare }) {
     staleTime: 60000,
   })
 
-   const cq = useQuery({
+  const cq = useQuery({
     queryKey: ['reports', 'pharmacy', 'compare', compareRange?.startISO, compareRange?.endISO],
     queryFn: () => {
       if (!compareRange) return Promise.resolve({ data: {} })
@@ -820,11 +820,12 @@ function PharmacySubTab({ range, compareRange, compare }) {
           color="#06b6d4"
         />
         <StatCard
-          label="Total Units"
-          value={totalUnits}
-          sub="dispensed + OTC"
-          icon="package"
-          color="#6366f1"
+          label="Pharmacy Expenses"
+          value={formatMoney(expenses)}
+          sub="in selected range"
+          icon="trendDown"
+          color="#ef4444"
+          compareValue={cStats.expenses_total}
         />
       </div>
 
@@ -917,7 +918,7 @@ export default function ReportsTab() {
     [compare, range]
   )
 
-    const activeColor = TABS.find((t) => t.key === activeTab)?.color || '#1a6cbf'
+  const activeColor = TABS.find((t) => t.key === activeTab)?.color || '#1a6cbf'
 
   return (
     <div className="space-y-4 print:space-y-2">

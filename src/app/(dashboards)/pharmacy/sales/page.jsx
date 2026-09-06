@@ -9,6 +9,7 @@ import {
   cap, formatMoney, formatTime, formatDateTime, timeAgo, StatCard,
   PAYMENT_METHODS, Spinner,
 } from '@/utils/helpers'
+import ReturnModal from '@/components/pharmacy/ReturnModal'
 import { useAuthStore } from '@/store/authStore'
 import { createOtcSaleSchema } from '@/lib/validation'
 
@@ -50,6 +51,28 @@ function tierBadgeClass(tier) {
   return NEUTRAL_BADGE
 }
 
+// Pharmacists can only reverse a sale on the day it happened. Admins get a
+// week. Mirrored server-side — this just avoids offering a button that 403s.
+const RETURN_WINDOW_DAYS = 7
+
+function returnPermission(sale, user) {
+  const sold = new Date(sale.sold_at)
+  const now = new Date()
+  const ageDays = Math.floor((now - sold) / 86400000)
+  const sameDay =
+    sold.getFullYear() === now.getFullYear() &&
+    sold.getMonth() === now.getMonth() &&
+    sold.getDate() === now.getDate()
+
+  if (ageDays > RETURN_WINDOW_DAYS) {
+    return { canReturn: false, reason: `Returns close after ${RETURN_WINDOW_DAYS} days` }
+  }
+  if (user?.role !== 'admin' && !sameDay) {
+    return { canReturn: false, reason: 'Only an admin can return a sale from a previous day' }
+  }
+  return { canReturn: true, reason: null }
+}
+
 function tierLabel(tier) {
   if (tier === 'normal') return 'Normal'
   if (tier === 'promotional') return 'Promotional'
@@ -77,18 +100,40 @@ function productSubtitle(p) {
   return [cap(p.sub_category), p.unit].filter(Boolean).join(' · ')
 }
 
+const SALES_PER_PAGE = 20
+
 export default function OTCSalesTab() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const soldBy = user?.name || 'Pharmacist'
   const [showNewSale, setShowNewSale] = useState(false)
   const [receiptSale, setReceiptSale] = useState(null)
+  const [returnSale, setReturnSale] = useState(null)
+
+  const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [page, setPage] = useState(1)
+
+  // Debounced so typing a receipt number doesn't fire a request per keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+
+  useEffect(() => { setPage(1) }, [debouncedSearch, from, to])
+
+  const params = { page, limit: SALES_PER_PAGE }
+  if (debouncedSearch) params.q = debouncedSearch
+  if (from) params.from = from
+  if (to) params.to = to
 
   const salesQuery = useQuery({
-    queryKey: ['pharmacy', 'otc-sales'],
-    queryFn: () => api.get('/api/pharmacy/otc-sales'),
-    refetchInterval: 30000,
+    queryKey: ['pharmacy', 'otc-sales', debouncedSearch, from, to, page],
+    queryFn: () => api.get('/api/pharmacy/otc-sales', { params }),
     staleTime: 15000,
+    placeholderData: (prev) => prev,
   })
 
   const isRefetching = salesQuery.isFetching
@@ -100,6 +145,21 @@ export default function OTCSalesTab() {
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'products'] })
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
     },
+  })
+
+    const returnMutation = useMutation({
+    mutationFn: ({ saleId, body }) => api.post(`/api/pharmacy/otc-sales/${saleId}/return`, body),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'otc-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'products'] })
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
+      const parts = []
+            if (res.return.cash_refund_amount > 0) parts.push(`${formatMoney(res.return.cash_refund_amount)} cash`)
+      if (res.return.credit_note_amount > 0) parts.push(`${formatMoney(res.return.credit_note_amount)} off their debt`)
+      toast.success(`${res.return.return_number} — refund ${parts.join(' + ')}`)
+      setReturnSale(null)
+    },
+    onError: (e) => toast.error(errMsg(e, 'Could not process return')),
   })
 
   if (salesQuery.isLoading) {
@@ -123,6 +183,7 @@ export default function OTCSalesTab() {
   }
 
   const sales = salesQuery.data?.sales || []
+  const pages = salesQuery.data?.pages || 1
   const stats = salesQuery.data?.stats
     || { total_sales: 0, total_revenue: 0, today_count: 0, today_revenue: 0 }
 
@@ -159,14 +220,46 @@ export default function OTCSalesTab() {
           value={stats.total_sales} sublabel="transactions" />
       </div>
 
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Recent Sales</h3>
+          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Sales</h3>
           <p className="text-[11px] text-gray-500 dark:text-gray-400">
-            Walk-in sales — medications, consumables and general goods
+            {salesQuery.data?.total ?? 0} sale{salesQuery.data?.total === 1 ? '' : 's'}
+            {debouncedSearch || from || to ? ' matching' : ''}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="relative">
+            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Receipt, customer or item…"
+              className="h-9 pl-8 pr-3 w-52 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+            />
+          </div>
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+            className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
+          />
+          <span className="text-[12px] text-gray-400">→</span>
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
+          />
+          {(search || from || to) && (
+            <button
+              onClick={() => { setSearch(''); setFrom(''); setTo('') }}
+              className="h-9 px-2.5 rounded-lg text-[12px] font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
+            >
+              Clear
+            </button>
+          )}
           <button
             onClick={() => salesQuery.refetch()}
             disabled={isRefetching}
@@ -191,15 +284,55 @@ export default function OTCSalesTab() {
       {!sales.length ? (
         <EmptyState
           icon="receipt"
-          title="No counter sales yet"
-          description="Start a sale to serve a walk-in customer. Receipts are generated automatically."
+          title={debouncedSearch || from || to ? 'No matching sales' : 'No counter sales yet'}
+          description={
+            debouncedSearch || from || to
+              ? 'Try a different receipt number, customer name or date range.'
+              : 'Start a sale to serve a walk-in customer. Receipts are generated automatically.'
+          }
         />
       ) : (
-        <div className="space-y-3">
-          {sales.map((sale) => (
-            <SaleCard key={sale.id} sale={sale} onPrint={() => setReceiptSale(sale)} />
-          ))}
-        </div>
+        <>
+          <div className="space-y-3">
+                       {sales.map((sale) => {
+              const perm = returnPermission(sale, user)
+              return (
+                <SaleCard
+                  key={sale.id}
+                  sale={sale}
+                  onPrint={() => setReceiptSale(sale)}
+                  onReturn={() => setReturnSale(sale)}
+                  canReturn={perm.canReturn}
+                  returnBlockedReason={perm.reason}
+                />
+              )
+            })}
+          </div>
+
+          {pages > 1 && (
+            <div className="flex items-center justify-between pt-1">
+              <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                Page <span className="font-semibold">{page}</span> of <span className="font-semibold">{pages}</span>
+              </p>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  ‹ Prev
+                </button>
+                <button
+                  onClick={() => setPage((p) => Math.min(pages, p + 1))}
+                  disabled={page >= pages}
+                  className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Next ›
+                </button>
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {showNewSale && (
@@ -214,15 +347,25 @@ export default function OTCSalesTab() {
       {receiptSale && (
         <ReceiptModal sale={receiptSale} soldBy={soldBy} onClose={() => setReceiptSale(null)} />
       )}
+            {returnSale && (
+        <ReturnModal
+          sale={returnSale}
+          loading={returnMutation.isPending}
+          onClose={() => setReturnSale(null)}
+          onSubmit={(body) => returnMutation.mutate({ saleId: returnSale.id, body })}
+        />
+      )}
     </div>
   )
 }
 
 // ─── Sale card ────────────────────────────────────────────────────────────────
 
-function SaleCard({ sale, onPrint }) {
+function SaleCard({ sale, onPrint, onReturn, canReturn, returnBlockedReason }) {
   const items = sale.items || []
   const itemCount = items.reduce((s, i) => s + (i.quantity || 0), 0)
+  const anyReturnable = items.some((i) => (i.returnable_qty ?? i.quantity) > 0)
+  const returns = sale.returns || []
 
   return (
     <Card className="p-4 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
@@ -260,12 +403,22 @@ function SaleCard({ sale, onPrint }) {
               </p>
             )}
           </div>
-          <button
+                    <button
             onClick={onPrint}
             className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-blue-800 dark:hover:text-blue-400 flex items-center gap-1.5"
           >
             <Icon name="printer" size={13} /> Print
           </button>
+          {anyReturnable && (
+            <button
+              onClick={onReturn}
+              disabled={!canReturn}
+              title={canReturn ? 'Process a return against this sale' : returnBlockedReason}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-amber-400 hover:text-amber-600 dark:hover:border-amber-800 dark:hover:text-amber-400 flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-gray-200 disabled:hover:text-gray-600"
+            >
+              <Icon name="arrowLeft" size={13} /> Return
+            </button>
+          )}
         </div>
       </div>
 
@@ -282,6 +435,21 @@ function SaleCard({ sale, onPrint }) {
                 {tierLabel(item.price_tier)}
               </span>
             </span>
+          ))}
+        </div>
+      )}
+
+      {returns.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-dashed border-gray-200 dark:border-gray-700/60 space-y-1">
+          {returns.map((r) => (
+            <div key={r.id} className="flex items-center justify-between text-[11px]">
+              <span className="text-amber-700 dark:text-amber-400">
+                {r.return_number} · {r.reason}
+              </span>
+              <span className="text-amber-700 dark:text-amber-400 tabular-nums font-medium">
+                −{formatMoney(r.refund_amount)}
+              </span>
+            </div>
           ))}
         </div>
       )}
@@ -311,7 +479,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const [discountReason, setDiscountReason] = useState('')
 
   const [paymentLines, setPaymentLines] = useState([
-    { uid: 1, method: 'cash', amount: '', reference: '' },
+    { uid: 1, method: 'cash', amount: '', reference: '', touched: false },
   ])
   const [nextUid, setNextUid] = useState(2)
 
@@ -324,10 +492,11 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     staleTime: 30000,
   })
 
+  
   const customersQuery = useQuery({
-    queryKey: ['pharmacy', 'customers', customerSearchQuery],
-    queryFn: () => api.get('/api/pharmacy/customers', { params: { q: customerSearchQuery } }),
-    enabled: customerSearchQuery.trim().length > 1 && showCustomerDropdown,
+    queryKey: ['pharmacy', 'customers', customerSearchQuery.trim()],
+    queryFn: () => api.get('/api/pharmacy/customers', { params: { q: customerSearchQuery.trim() } }),
+    enabled: showCustomerDropdown,
     staleTime: 30000,
   })
 
@@ -384,21 +553,37 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const cartTotal = Math.max(0, cartSubtotal - disc)
 
   useEffect(() => {
-    if (paymentLines.length === 1 && cartTotal > 0) {
-      const line = paymentLines[0]
-      if (line.amount === '' || line.amount === '0') {
-        setPaymentLines((prev) =>
-          prev.map((p) => (p.uid === line.uid ? { ...p, amount: String(cartTotal) } : p))
-        )
-      }
-    }
-  }, [cartTotal, paymentLines.length])
-
+    setPaymentLines((prev) => {
+      if (prev.length !== 1 || prev[0].touched) return prev
+      const next = cartTotal > 0 ? String(cartTotal) : ''
+      if (prev[0].amount === next) return prev
+      return [{ ...prev[0], amount: next }]
+    })
+  }, [cartTotal])
+  function hasCreditLine(lines) {
+    return lines.some((p) => p.method === 'credit')
+  }
   const totalPaid = paymentLines.reduce((s, p) => s + (parseInt(p.amount) || 0), 0)
   const remaining = cartTotal - totalPaid
-  const hasCredit = paymentLines.some((p) => p.method === 'credit')
-  const isBalanced = remaining === 0
+    const shortfall = Math.max(0, remaining)
+  const overpaid = Math.max(0, totalPaid - cartTotal)
+  const cashOnly = paymentLines.length === 1 && paymentLines[0].method === 'cash'
+  const change = cashOnly ? overpaid : 0
+  const invalidOverpay = overpaid > 0 && !cashOnly
+  const hasCredit = hasCreditLine(paymentLines)
+  const isBalanced = shortfall === 0
   const hasEmptyMethod = paymentLines.some((p) => !p.method)
+
+  const creditPortion = paymentLines
+    .filter((p) => p.method === 'credit')
+    .reduce((s, p) => s + (parseInt(p.amount) || 0), 0)
+
+
+  const custBalance = Number(selectedCustomer?.balance ?? 0)
+  const custLimit = Number(selectedCustomer?.credit_limit ?? 0)
+  const custHeadroom = Number(selectedCustomer?.headroom ?? 0)
+  const overLimit = hasCredit && selectedCustomer && creditPortion > custHeadroom
+  const noLimitSet = hasCredit && selectedCustomer && custLimit <= 0
 
   const usedMethods = useMemo(
     () => new Set(paymentLines.map((p) => p.method).filter(Boolean)),
@@ -428,26 +613,27 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
 
   function selectProduct(product) {
     setSelectedProduct(product)
-    setSelectedTier('normal')
-    setQuantity(1)
+        setSelectedTier('normal')
+    setQuantity('1')
     setShowDropdown(false)
     setSearchQuery(product.name)
   }
 
   function clearSelection() {
     setSelectedProduct(null)
-    setSelectedTier(null)
-    setQuantity(1)
+        setSelectedTier(null)
+    setQuantity('1')
     setSearchQuery('')
   }
 
   function handleAddToCart() {
-    if (!selectedProduct || !selectedTier || !quantity || quantity < 1) {
+       const qtyNum = parseInt(quantity, 10) || 0
+    if (!selectedProduct || !selectedTier || qtyNum < 1) {
       toast.error('Pick an item, a price tier and a quantity first')
       return
     }
     const alreadyInCart = inCartFor(selectedProduct.id)
-    if (alreadyInCart + Number(quantity) > selectedProduct.current_stock) {
+    if (alreadyInCart + qtyNum > selectedProduct.current_stock) {
       const left = selectedProduct.current_stock - alreadyInCart
       toast.error(
         left > 0
@@ -456,18 +642,29 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       )
       return
     }
-    setCart((prev) => [
-      ...prev,
-      {
-        product_id: selectedProduct.id,
-        name: selectedProduct.name,
-        category: selectedProduct.category,
-        unit: selectedProduct.unit,
-        quantity: quantity === '' ? 1 : Math.max(1, parseInt(quantity, 10) || 1),
-        unit_price: selectedPrice,
-        price_tier: selectedTier,
-      },
-    ])
+        const qty = qtyNum
+
+    setCart((prev) => {
+      // Same product at the same tier is the same line — adding again bumps the
+      // quantity rather than creating a duplicate the cashier has to reconcile.
+      const idx = prev.findIndex(
+        (c) => c.product_id === selectedProduct.id && c.price_tier === selectedTier
+      )
+      if (idx === -1) {
+        return [...prev, {
+          product_id: selectedProduct.id,
+          name: selectedProduct.name,
+          category: selectedProduct.category,
+          unit: selectedProduct.unit,
+          quantity: qty,
+          unit_price: selectedPrice,
+          price_tier: selectedTier,
+        }]
+      }
+      const next = [...prev]
+      next[idx] = { ...next[idx], quantity: next[idx].quantity + qty }
+      return next
+    })
     clearSelection()
   }
 
@@ -475,14 +672,42 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     setCart((prev) => prev.filter((_, i) => i !== index))
   }
 
+  function updateCartQty(index, nextQty) {
+    const item = cart[index]
+    if (nextQty < 1) return removeCartItem(index)
+
+    // Stock check excludes this line's own quantity, or editing would compare
+    // against a total that already includes what we're replacing.
+    const product = products.find((p) => p.id === item.product_id)
+    if (product) {
+      const otherLines = cart.reduce(
+        (s, c, i) => (i !== index && c.product_id === item.product_id ? s + c.quantity : s),
+        0
+      )
+      if (otherLines + nextQty > product.current_stock) {
+        toast.error(`Only ${product.current_stock - otherLines} ${product.unit || 'units'} of ${item.name} left`)
+        return
+      }
+    }
+
+    setCart((prev) => prev.map((c, i) => (i === index ? { ...c, quantity: nextQty } : c)))
+  }
+
   function addPaymentLine() {
     if (availableMethods.length === 0) {
       toast.error('All payment methods are already added')
       return
     }
+    const outstanding = Math.max(0, cartTotal - totalPaid)
     setPaymentLines((prev) => [
       ...prev,
-      { uid: nextUid, method: availableMethods[0], amount: '', reference: '' },
+      {
+        uid: nextUid,
+        method: availableMethods[0],
+        amount: outstanding > 0 ? String(outstanding) : '',
+        reference: '',
+        touched: false,
+      },
     ])
     setNextUid((n) => n + 1)
   }
@@ -492,7 +717,9 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   }
 
   function updatePaymentLine(uid, updates) {
-    setPaymentLines((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...updates } : p)))
+    // Any manual amount edit pins the line — the auto-fill effect leaves it alone.
+    const patch = 'amount' in updates ? { ...updates, touched: true } : updates
+    setPaymentLines((prev) => prev.map((p) => (p.uid === uid ? { ...p, ...patch } : p)))
   }
 
   function handleSubmit(e) {
@@ -507,12 +734,24 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       toast.error('A reason is required for every discount')
       return
     }
-    if (remaining !== 0) {
-      toast.error(`Payments must cover the full total. Remaining: ${formatMoney(remaining)}`)
+    if (shortfall > 0) {
+      toast.error(`Payments must cover the full total. Remaining: ${formatMoney(shortfall)}`)
+      return
+    }
+    if (invalidOverpay) {
+      toast.error('M-Pesa and credit amounts must be exact — only cash can be over-tendered')
       return
     }
     if (hasCredit && (!customerPhone.trim() || customerName === 'Walk-in Customer')) {
       toast.error('Credit sales require a customer name and phone')
+      return
+    }
+    if (noLimitSet) {
+      toast.error(`${selectedCustomer.name} has no credit limit — an admin must approve one first`)
+      return
+    }
+    if (overLimit) {
+      toast.error(`Credit limit exceeded — only ${formatMoney(custHeadroom)} available`)
       return
     }
 
@@ -522,11 +761,15 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       customer_phone: hasCredit ? customerPhone.trim() : null,
       discount_amount: disc,
       discount_reason: disc > 0 ? discountReason.trim() : null,
-      payments: paymentLines.map((p) => ({
-        method: p.method,
-        amount: Math.max(0, Math.round(Number(p.amount) || 0)),  // Money = int ≥ 0
-        reference: p.reference?.trim() || null,
-      })),
+      payments: (() => {
+        const lines = paymentLines.map((p) => ({
+          method: p.method,
+          amount: Math.max(0, Math.round(Number(p.amount) || 0)),
+          reference: p.reference?.trim() || null,
+        }))
+        if (change > 0) lines[0].amount -= change
+        return lines
+      })(),
       items: cart.map((i) => ({
         product_id: i.product_id,
         name: i.name,
@@ -608,8 +851,13 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 )}
               </div>
 
-              {showCustomerDropdown && customerSearchQuery.trim().length > 1 && (
+                            {showCustomerDropdown && (
                 <div className="absolute z-30 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl max-h-60 overflow-y-auto">
+                  {!customerSearchQuery.trim() && customers.length > 0 && (
+                    <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400 border-b border-gray-100 dark:border-gray-700/40">
+                      Recent customers
+                    </p>
+                  )}
                   {customersQuery.isLoading && (
                     <div className="px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
                       Searching customers…
@@ -629,9 +877,11 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                       </button>
                     </div>
                   )}
-                  {!customersQuery.isLoading && !customersQuery.error && customers.length === 0 && (
+                                    {!customersQuery.isLoading && !customersQuery.error && customers.length === 0 && (
                     <div className="px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
-                      No customers found. Type to create a new one.
+                      {customerSearchQuery.trim()
+                        ? 'No match. Keep typing to create a new customer.'
+                        : 'No customers yet. Type a name to create one.'}
                     </div>
                   )}
                   {!customersQuery.isLoading && !customersQuery.error && customers.map((c) => (
@@ -645,7 +895,18 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                         <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{c.name}</p>
                         {c.phone && <p className="text-[11px] text-gray-500 dark:text-gray-400">{c.phone}</p>}
                       </div>
-                      <span className="text-[11px] text-gray-400">Select</span>
+                      <div className="text-right shrink-0">
+                        {c.balance > 0 ? (
+                          <p className="text-[11px] font-semibold text-red-600 dark:text-red-400 tabular-nums">
+                            owes {formatMoney(c.balance)}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-emerald-600 dark:text-emerald-400">no debt</p>
+                        )}
+                        <p className="text-[10px] text-gray-400 tabular-nums">
+                          {formatMoney(c.headroom)} available
+                        </p>
+                      </div>
                     </button>
                   ))}
                 </div>
@@ -658,6 +919,29 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 placeholder="Phone number (required for credit)"
                 className="w-full px-3 py-2 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
               />
+
+              {selectedCustomer && custBalance > 0 && (
+                <div className="rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5">
+                      <Icon name="alert" size={12} />
+                      Outstanding debt
+                    </span>
+                    <span className="text-[13px] font-bold text-red-700 dark:text-red-400 tabular-nums">
+                      {formatMoney(custBalance)}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-red-600 dark:text-red-400 mt-0.5 tabular-nums">
+                    Limit {formatMoney(custLimit)} · {formatMoney(custHeadroom)} still available
+                  </p>
+                </div>
+              )}
+
+              {selectedCustomer && custBalance === 0 && (
+                <p className="text-[11px] text-emerald-600 dark:text-emerald-400">
+                  No outstanding debt · {formatMoney(custHeadroom)} credit available
+                </p>
+              )}
             </div>
           </div>
 
@@ -868,7 +1152,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                     <button
                       type="button"
                       onClick={handleAddToCart}
-                      disabled={!selectedTier || quantity < 1}
+                      disabled={!selectedTier || (parseInt(quantity, 10) || 0) < 1}
                       className="w-full h-9 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       <Icon name="plus" size={14} /> Add to Sale
@@ -920,9 +1204,29 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                           {tierLabel(item.price_tier)}
                         </span>
                       </div>
-                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5 tabular-nums">
-                        {formatMoney(item.unit_price)} × {item.quantity} {item.unit || ''}
-                      </p>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400 tabular-nums">
+                          {formatMoney(item.unit_price)} ×
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => updateCartQty(i, item.quantity - 1)}
+                          className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
+                        >
+                          −
+                        </button>
+                        <span className="text-[11px] font-semibold text-gray-700 dark:text-gray-300 tabular-nums w-6 text-center">
+                          {item.quantity}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => updateCartQty(i, item.quantity + 1)}
+                          className="w-5 h-5 rounded flex items-center justify-center text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
+                        >
+                          +
+                        </button>
+                        <span className="text-[11px] text-gray-500 dark:text-gray-400">{item.unit || ''}</span>
+                      </div>
                     </div>
                     <span className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums shrink-0">
                       {formatMoney(item.unit_price * item.quantity)}
@@ -1014,12 +1318,22 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 <span
                   className={[
                     'text-[11px] font-medium tabular-nums',
-                    isBalanced
-                      ? 'text-emerald-600 dark:text-emerald-400'
-                      : 'text-amber-600 dark:text-amber-400',
+                    invalidOverpay
+                      ? 'text-red-600 dark:text-red-400'
+                      : change > 0
+                        ? 'text-blue-600 dark:text-blue-400'
+                        : isBalanced
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : 'text-amber-600 dark:text-amber-400',
                   ].join(' ')}
                 >
-                  {isBalanced ? 'Fully paid' : `Remaining: ${formatMoney(remaining)}`}
+                  {invalidOverpay
+                    ? `Over by ${formatMoney(overpaid)} — split payments must add up exactly`
+                    : change > 0
+                      ? `Change due: ${formatMoney(change)}`
+                      : isBalanced
+                        ? 'Fully paid'
+                        : `Remaining: ${formatMoney(shortfall)}`}
                 </span>
               </div>
 
@@ -1040,13 +1354,29 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                     </select>
 
                     <input
-                      type="number"
-                      min={0}
+                      type="text"
+                      inputMode="numeric"
                       value={line.amount}
-                      onChange={(e) => updatePaymentLine(line.uid, { amount: e.target.value })}
+                      onChange={(e) =>
+                        updatePaymentLine(line.uid, { amount: e.target.value.replace(/[^\d]/g, '') })
+                      }
                       placeholder="Amount"
-                      className="flex-1 h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                      className="flex-1 h-9 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 tabular-nums"
                     />
+
+                    <button
+                      type="button"
+                      onClick={() =>
+                        updatePaymentLine(line.uid, {
+                          amount: String(Math.max(0, (parseInt(line.amount) || 0) + remaining)),
+                        })
+                      }
+                      disabled={remaining === 0}
+                      title="Put the outstanding balance on this line"
+                      className="px-2 h-9 shrink-0 rounded-lg text-[11px] font-medium bg-gray-100 dark:bg-gray-700/40 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Rest
+                    </button>
 
                     {line.method === 'mpesa' && (
                       <input
@@ -1081,6 +1411,17 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               </button>
             </div>
 
+            {hasCredit && (overLimit || noLimitSet) && (
+              <div className="p-3 rounded-lg border border-red-200 dark:border-red-900/60 bg-red-50 dark:bg-red-950/30">
+                <p className="text-[11px] font-semibold text-red-700 dark:text-red-400 flex items-center gap-1.5">
+                  <Icon name="alert" size={12} />
+                  {noLimitSet
+                    ? `${selectedCustomer.name} has no credit limit — an admin must approve one first`
+                    : `Credit limit exceeded — only ${formatMoney(custHeadroom)} available, ${formatMoney(creditPortion)} requested`}
+                </p>
+              </div>
+            )}
+
             {hasCredit && (
               <div className="p-3 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30">
                 <p className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 mb-2">
@@ -1111,8 +1452,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
             </button>
             <button
               type="submit"
-              disabled={loading || !cart.length || !isBalanced || hasEmptyMethod}
-              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={loading || !cart.length || !isBalanced || hasEmptyMethod || invalidOverpay || overLimit || noLimitSet} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading
                 ? <><Spinner size={14} /> Processing…</>

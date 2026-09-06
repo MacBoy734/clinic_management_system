@@ -42,21 +42,26 @@ import {
   flattenTemplateFields,
   evaluateField,
   buildResultPayload,
+  buildAppliedRanges,
   isAnyFieldAbnormal,
 } from '@/utils/labResult'
 
 const EVAL_BADGES = {
-  normal:   'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-  low:      'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  high:     'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-  abnormal: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-  unknown:  'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
+  normal:        'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  low:           'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  high:          'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  critical_low:  'bg-red-600 text-white dark:bg-red-700',
+  critical_high: 'bg-red-600 text-white dark:bg-red-700',
+  abnormal:      'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  unknown:       'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
 }
 
 const EVAL_LABELS = {
   normal: 'Normal',
   low: 'LOW',
   high: 'HIGH',
+  critical_low: 'CRITICAL LOW',
+  critical_high: 'CRITICAL HIGH',
   abnormal: 'ABNORMAL',
   unknown: '—',
 }
@@ -67,9 +72,10 @@ const DEFAULT_SENSITIVITY_COLUMNS = ['HS', 'S', 'SS', 'R']
 
 export function ResultsModal({ request, loading, onClose, onSave }) {
   // patient context used to resolve gender-specific ranges
-  const patient = {
+   const patient = {
     gender: request.patient_gender,
     age: request.patient_age,
+    age_unit: request.age_unit || 'years',
   }
 
   // values[itemId] = flat map keyed by field.key across all sections,
@@ -180,12 +186,15 @@ export function ResultsModal({ request, loading, onClose, onSave }) {
     (request.items || []).map((item) => {
       const template = item.catalog?.result_template
       const v = values[item.id] || {}
-      const { result, result_data } = buildResultPayload(template, v)
+            const { result, result_data } = buildResultPayload(template, v)
       const flagged = isAnyFieldAbnormal(template, v, patient)
       return {
         id: item.id,
         result,
         result_data,
+        // Snapshot of the ranges actually applied. Stored so a reprint years
+        // later shows what was used then, not what the catalogue says now.
+        applied_ranges: buildAppliedRanges(template, v, patient),
         result_notes: notes[item.id]?.trim() || null,
         flagged,
         // Always send the array (even empty — that means "tech cleared them"
@@ -523,7 +532,7 @@ function FieldShell({ field, status, children, fullWidth }) {
 }
 
 function NumberField({ field, value, onChange, patient }) {
-  const { status, range } = evaluateField(field, value, patient)
+  const { status, range, band } = evaluateField(field, value, patient)
   const showBadge = value !== '' && value != null
   return (
     <FieldShell field={field} status={showBadge ? status : null}>
@@ -538,7 +547,16 @@ function NumberField({ field, value, onChange, patient }) {
         />
         {field.unit && <span className="text-[10px] text-gray-400">{field.unit}</span>}
       </div>
-      {range && <p className="text-[10px] text-gray-400 mt-1">Ref: {range}</p>}
+            {range && (
+        <p className="text-[10px] text-gray-400 mt-1">
+          Ref: {range}
+          {band?.src === 'unverified' && (
+            <span className="ml-1 text-amber-500" title="Placeholder range — not yet confirmed by the lab">
+              (unverified)
+            </span>
+          )}
+        </p>
+      )}
     </FieldShell>
   )
 }
@@ -575,7 +593,7 @@ function TextareaField({ field, value, onChange }) {
 }
 
 function SelectField({ field, value, onChange, patient }) {
-  const { status, range } = evaluateField(field, value, patient)
+    const { status, range, band } = evaluateField(field, value, patient)
   const showBadge = value !== '' && value != null
   return (
     <FieldShell field={field} status={showBadge ? status : null}>
@@ -595,7 +613,7 @@ function SelectField({ field, value, onChange, patient }) {
 }
 
 function RadioField({ field, value, onChange, patient }) {
-  const { status, range } = evaluateField(field, value, patient)
+  const { status, range, band } = evaluateField(field, value, patient)
   const showBadge = value !== '' && value != null
   return (
     <FieldShell field={field} status={showBadge ? status : null}>
@@ -616,7 +634,16 @@ function RadioField({ field, value, onChange, patient }) {
           </button>
         ))}
       </div>
-      {range && <p className="text-[10px] text-gray-400 mt-1">Ref: {range}</p>}
+            {range && (
+        <p className="text-[10px] text-gray-400 mt-1">
+          Ref: {range}
+          {band?.src === 'unverified' && (
+            <span className="ml-1 text-amber-500" title="Placeholder range — not yet confirmed by the lab">
+              (unverified)
+            </span>
+          )}
+        </p>
+      )}
     </FieldShell>
   )
 }

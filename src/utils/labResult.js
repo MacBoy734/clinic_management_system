@@ -1,133 +1,131 @@
+
+// ─── Age ──────────────────────────────────────────────────────────────────────
+
 /**
- * utils/labResult.js
- *
- * Works against the REAL result_template shape produced by prisma/seed.js:
- *
- *   result_template: {
- *     sections: [
- *       {
- *         title?: string,
- *         fields: [
- *           {
- *             key: string,               // unique within the whole template
- *             label: string,
- *             unit: string,              // '' if unitless
- *             input_type: 'number' | 'text' | 'textarea' | 'select' | 'radio' | 'sensitivity',
- *             options?: string[],        // select / radio only
- *             reference_range?: string,  // free-text range, e.g. "2.5 - 7.1", "< 5.2", "Negative"
- *             by_sex?: { male: string, female: string }, // optional, overrides reference_range
- *             columns?: string[],        // sensitivity only, e.g. ['HS','S','SS','R']
- *             rows_label?: string,       // sensitivity only, e.g. 'Antibiotic'
- *           },
- *         ],
- *       },
- *     ],
- *   }
- *
- * There is no top-level `type: 'single' | 'panel'` distinction — a
- * "single-value" test is simply a template with one section containing one
- * field. Every field is rendered/evaluated the same way, dispatched on
- * input_type.
+ * Normalise Patient.age + age_unit to decimal years. Without this a
+ * 3-month-old stored as { age: 3, age_unit: 'months' } matches adult bands.
  */
+export function ageInYears(age, unit) {
+  if (age == null || age === '') return null
+  const n = Number(age)
+  if (!Number.isFinite(n)) return null
+  switch (unit) {
+    case 'days': return n / 365.25
+    case 'weeks': return n / 52.18
+    case 'months': return n / 12
+    default: return n
+  }
+}
 
-// ─── Flattening ────────────────────────────────────────────────────────────────
+// ─── Flattening ───────────────────────────────────────────────────────────────
 
-/** Returns every field across every section as one flat array. */
 export function flattenTemplateFields(template) {
   if (!template?.sections) return []
   return template.sections.flatMap((s) => s.fields || [])
 }
 
-// ─── Range resolution + parsing ────────────────────────────────────────────────
+// ─── Band resolution ──────────────────────────────────────────────────────────
 
-/** Picks the range string to use for a given patient: by_sex override first, else reference_range. */
-function resolveRangeString(field, patient) {
-  if (field.by_sex && patient?.gender && field.by_sex[patient.gender]) {
-    return field.by_sex[patient.gender]
-  }
-  return field.reference_range ?? null
+/**
+ * Picks the band that applies to this patient. Bands are ordered in the
+ * catalogue and the first match wins, so put the specific ones first.
+ *
+ * Returns null when nothing matches — that means "no range for this patient",
+ * which is a legitimate outcome and must not be treated as normal.
+ */
+export function resolveBand(field, patient) {
+  const bands = field?.ranges
+  if (!Array.isArray(bands) || bands.length === 0) return null
+
+  const gender = patient?.gender ?? null
+  const years = ageInYears(patient?.age, patient?.age_unit)
+
+  return bands.find((b) => {
+    if (b.gender && b.gender !== 'any' && b.gender !== gender) return false
+    if (years != null) {
+      if (b.age_min != null && years < b.age_min) return false
+      if (b.age_max != null && years >= b.age_max) return false
+    }
+    return true
+  }) ?? null
 }
 
 /**
- * Attempts to parse a numeric bound out of a reference-range string.
- * Handles: "a - b", "< x", "≤ x", "<= x", "> x", "≥ x", ">= x".
- * Deliberately bails out (returns null) on compound/tiered strings
- * containing '|' (e.g. "Deficient:<30 | Insuff:30-50 | Suff:50-125") since
- * those have no single "normal" band — those tests carry a separate
- * `interpretation` select field for the tech to use instead.
+ * Bands that differ only by phase (menstrual cycle, pregnancy) cannot be
+ * resolved from what the system knows. The tech has to pick.
  */
-function parseNumericRange(rangeStr) {
-  if (!rangeStr || rangeStr.includes('|')) return null
-  const str = rangeStr.trim()
-
-  let m = str.match(/(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)/)
-  if (m) return { min: parseFloat(m[1]), max: parseFloat(m[2]) }
-
-  m = str.match(/[≤]|<=|(?:^|\s)<\s*(-?\d+(?:\.\d+)?)/)
-  m = str.match(/(?:≤|<=)\s*(-?\d+(?:\.\d+)?)/) || str.match(/<\s*(-?\d+(?:\.\d+)?)/)
-  if (m) {
-    const inclusive = str.includes('≤') || str.includes('<=')
-    return { max: parseFloat(m[1]), maxInclusive: inclusive }
-  }
-
-  m = str.match(/(?:≥|>=)\s*(-?\d+(?:\.\d+)?)/) || str.match(/>\s*(-?\d+(?:\.\d+)?)/)
-  if (m) {
-    const inclusive = str.includes('≥') || str.includes('>=')
-    return { min: parseFloat(m[1]), minInclusive: inclusive }
-  }
-
-  return null
+export function phaseBands(field, patient) {
+  const bands = field?.ranges
+  if (!Array.isArray(bands)) return []
+  const gender = patient?.gender ?? null
+  const withPhase = bands.filter((b) => b.phase)
+  if (withPhase.length < 2) return []
+  return withPhase.filter((b) => !b.gender || b.gender === 'any' || b.gender === gender)
 }
 
-// ─── Per-field evaluation (live feedback as the tech types) ───────────────────
+/** Human-readable range for the Ref column. */
+export function formatBand(band, unit = '') {
+  if (!band) return null
+  const u = unit ? ` ${unit}` : ''
+  if (Array.isArray(band.normal_values) && band.normal_values.length) {
+    return band.normal_values.join(' / ')
+  }
+  const { low, high } = band
+  if (low == null && high == null) return null
+  if (low == null) return `< ${high}${u}`
+  if (high == null) return `> ${low}${u}`
+  return `${low} – ${high}${u}`
+}
+
+// ─── Evaluation ───────────────────────────────────────────────────────────────
 
 /**
- * Returns { status, range } for a single field given its current value.
- * status: 'normal' | 'low' | 'high' | 'abnormal' | 'unknown'
- * range:  the resolved range string, for display (e.g. "Ref: 13.5 - 17.5")
+ * status: 'normal' | 'low' | 'high' | 'critical_low' | 'critical_high'
+ *       | 'abnormal' | 'unknown'
+ *
+ * Returns the matched band too, so callers can read `src` (unverified bands
+ * should not drive an automatic flag) and `notes`.
  */
-export function evaluateField(field, value, patient) {
-  const range = resolveRangeString(field, patient)
+export function evaluateField(field, value, patient, options = {}) {
+  const band = options.band ?? resolveBand(field, patient)
+  const range = formatBand(band, field?.unit)
   const empty = value == null || value === ''
 
-  if (empty) return { status: 'unknown', range }
+  if (empty) return { status: 'unknown', range, band }
+  if (!band) return { status: 'unknown', range: null, band: null }
 
   if (field.input_type === 'select' || field.input_type === 'radio') {
-    if (!range) return { status: 'unknown', range }
-    return {
-      status: String(value).trim().toLowerCase() === String(range).trim().toLowerCase()
-        ? 'normal'
-        : 'abnormal',
-      range,
+    const normals = band.normal_values
+    if (!Array.isArray(normals) || normals.length === 0) {
+      return { status: 'unknown', range, band }
     }
+    const v = String(value).trim().toLowerCase()
+    const ok = normals.some((n) => String(n).trim().toLowerCase() === v)
+    return { status: ok ? 'normal' : 'abnormal', range, band }
   }
 
   if (field.input_type === 'number') {
-    const parsed = parseNumericRange(range)
     const num = parseFloat(value)
-    if (!parsed || Number.isNaN(num)) return { status: 'unknown', range }
+    if (Number.isNaN(num)) return { status: 'unknown', range, band }
 
-    if (parsed.min != null && parsed.max != null) {
-      if (num < parsed.min) return { status: 'low', range }
-      if (num > parsed.max) return { status: 'high', range }
-      return { status: 'normal', range }
-    }
-    if (parsed.max != null) {
-      const withinUpper = parsed.maxInclusive ? num <= parsed.max : num < parsed.max
-      return { status: withinUpper ? 'normal' : 'high', range }
-    }
-    if (parsed.min != null) {
-      const withinLower = parsed.minInclusive ? num >= parsed.min : num > parsed.min
-      return { status: withinLower ? 'normal' : 'low', range }
-    }
-    return { status: 'unknown', range }
+    if (band.crit_low != null && num < band.crit_low) return { status: 'critical_low', range, band }
+    if (band.crit_high != null && num > band.crit_high) return { status: 'critical_high', range, band }
+    if (band.low != null && num < band.low) return { status: 'low', range, band }
+    if (band.high != null && num > band.high) return { status: 'high', range, band }
+    if (band.low == null && band.high == null) return { status: 'unknown', range, band }
+    return { status: 'normal', range, band }
   }
 
-  // text / textarea / sensitivity — no automatic evaluation, tech's own judgment
-  return { status: 'unknown', range }
+  // text / textarea / sensitivity — the tech's own judgment
+  return { status: 'unknown', range, band }
 }
 
-// ─── Result payload building (on save) ─────────────────────────────────────────
+
+export function isAbnormalStatus(status) {
+  return ABNORMAL.has(status)
+}
+
+// ─── Payload ──────────────────────────────────────────────────────────────────
 
 function formatSensitivitySummary(rows) {
   if (!Array.isArray(rows) || rows.length === 0) return null
@@ -137,15 +135,6 @@ function formatSensitivitySummary(rows) {
     .join(', ')
 }
 
-/**
- * Builds { result, result_data } for one lab request item from its
- * flat values map (keyed by field.key across all sections).
- *
- * result_data: the raw values map, saved as-is (Json column).
- * result:      a short human-readable summary string used anywhere the full
- *              structured data isn't rendered (e.g. patient visit history,
- *              admin overview activity feed).
- */
 export function buildResultPayload(template, values) {
   const fields = flattenTemplateFields(template)
   const parts = []
@@ -159,9 +148,7 @@ export function buildResultPayload(template, values) {
       if (summary) parts.push(`${f.label}: ${summary}`)
       return
     }
-
-    const unit = f.unit ? ` ${f.unit}` : ''
-    parts.push(`${f.label}: ${v}${unit}`)
+    parts.push(`${f.label}: ${v}${f.unit ? ` ${f.unit}` : ''}`)
   })
 
   return {
@@ -171,14 +158,35 @@ export function buildResultPayload(template, values) {
 }
 
 /**
- * True if any field's value falls outside its normal range, so the item can
- * be flagged for the doctor. Sensitivity fields flag if any organism shows
- * resistant ('R').
+ * The range that was actually applied, snapshotted at save time and stored on
+ * LabRequestItem.reference_range. A reprint years later must show what was
+ * used then, not what the catalogue says now — the patient will have aged and
+ * the catalogue may have been revised.
  */
-export function isAnyFieldAbnormal(template, values, patient) {
-  const fields = flattenTemplateFields(template)
+export function buildAppliedRanges(template, values, patient) {
+  const applied = {}
+  flattenTemplateFields(template).forEach((f) => {
+    const v = values?.[f.key]
+    if (v == null || v === '') return
+    const band = resolveBand(f, patient)
+    if (!band) return
+    applied[f.key] = {
+      label: f.label,
+      unit: f.unit || null,
+      range: formatBand(band, f.unit),
+      low: band.low ?? null,
+      high: band.high ?? null,
+      crit_low: band.crit_low ?? null,
+      crit_high: band.crit_high ?? null,
+      src: band.src || 'unverified',
+      notes: band.notes || null,
+    }
+  })
+  return applied
+}
 
-  return fields.some((f) => {
+export function isAnyFieldAbnormal(template, values, patient) {
+  return flattenTemplateFields(template).some((f) => {
     const v = values?.[f.key]
     if (v == null || v === '') return false
 
@@ -186,95 +194,13 @@ export function isAnyFieldAbnormal(template, values, patient) {
       return Array.isArray(v) && v.some((row) => row?.result === 'R')
     }
 
-    const { status } = evaluateField(f, v, patient)
-    return status === 'low' || status === 'high' || status === 'abnormal'
+    const { status, band } = evaluateField(f, v, patient)
+    if (!band) return false
+    return isAbnormalStatus(status)
   })
 }
 
-/** True if at least one field on this item has a non-empty value. */
-export function isItemFilled(item) {
-  const fields = flattenTemplateFields(item.catalog?.result_template)
-  const v = item._values || {}
-  return fields.some((f) => v[f.key] != null && v[f.key] !== '')
-}
 
-// ─── Range helpers used by ReportModal ────────────────────────────────────────
 
-/**
- * resolveRange — used by ReportModal to get a display range string for a
- * field or a whole-template range.
- *
- * Accepts two call signatures to match how ReportModal calls it:
- *   resolveRange(field.ranges, patient)   — where field.ranges is an object
- *                                           like { low, high } (old shape)
- *   resolveRange(template.ranges, patient) — same
- *
- * Since your real template shape uses free-text reference_range strings
- * (not { low, high } objects), ReportModal should ideally be updated to call
- * evaluateField / resolveRangeString instead. But to fix the build error
- * without touching ReportModal, this shim handles both shapes:
- *
- *   - If passed a field object (has .reference_range or .by_sex) → resolves
- *     via resolveRangeString and returns the string directly.
- *   - If passed a { low, high } object → returns it as-is (legacy shape).
- *   - If passed null/undefined → returns null.
- */
-export function resolveRange(rangesOrField, patient) {
-  if (!rangesOrField) return null
 
-  // If it looks like a field descriptor (has reference_range or by_sex or input_type)
-  // resolve via the internal resolveRangeString helper which handles by_sex overrides
-  if (
-    typeof rangesOrField === 'object' &&
-    ('reference_range' in rangesOrField || 'by_sex' in rangesOrField || 'input_type' in rangesOrField)
-  ) {
-    return resolveRangeString(rangesOrField, patient) ?? null
-  }
-
-  // Legacy { low, high } shape — return as-is so formatRange can display it
-  if (typeof rangesOrField === 'object' && ('low' in rangesOrField || 'high' in rangesOrField)) {
-    return rangesOrField
-  }
-
-  // Plain string passed directly — return as-is
-  if (typeof rangesOrField === 'string') return rangesOrField
-
-  return null
-}
-
-/**
- * formatRange — formats a resolved range value into a human-readable string
- * for the Reference Range column in the printed lab report.
- *
- * Accepts:
- *   formatRange(rangeString, unit)  — e.g. formatRange('4.0 - 11.0', 'x10³/μL')
- *   formatRange({ low, high }, unit) — legacy object shape
- *   formatRange(null, unit)          — returns '—'
- */
-export function formatRange(range, unit = '') {
-  if (!range) return '—'
-
-  // Free-text string (your real shape) — append unit if not already present
-  if (typeof range === 'string') {
-    const trimmed = range.trim()
-    if (!trimmed) return '—'
-    // Avoid doubling the unit if it's already in the string
-    if (unit && !trimmed.includes(unit)) return `${trimmed} ${unit}`.trim()
-    return trimmed
-  }
-
-  // Legacy { low, high } object shape
-  if (typeof range === 'object') {
-    const { low, high, min, max } = range
-    const lo = low  ?? min  ?? null
-    const hi = high ?? max  ?? null
-    const u  = unit ? ` ${unit}` : ''
-
-    if (lo == null && hi == null) return '—'
-    if (lo == null) return `< ${hi}${u}`
-    if (hi == null) return `> ${lo}${u}`
-    return `${lo} – ${hi}${u}`
-  }
-
-  return '—'
-}
+const ABNORMAL = new Set(['low', 'high', 'critical_low', 'critical_high', 'abnormal'])

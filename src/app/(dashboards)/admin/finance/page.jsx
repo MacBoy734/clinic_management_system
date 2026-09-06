@@ -9,6 +9,7 @@ import {
   SkeletonCard, SkeletonTable, Spinner,
   formatMoney, formatDate, formatDateTime, cap, badgeClass,
 } from '@/utils/helpers'
+import ReturnModal from '@/components/pharmacy/ReturnModal'
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -42,16 +43,14 @@ const BILLED_BUCKETS = [
 ]
 
 const PHARMACY_REVENUE_BUCKETS = [
-  { key: 'cash_sales', label: 'Cash Sales', color: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400', track: 'bg-emerald-100 dark:bg-emerald-900/40', extract: (rev) => Number(rev?.cash_sales ?? 0) },
-  { key: 'credit_sales', label: 'Credit Sales', color: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-400', track: 'bg-amber-100 dark:bg-amber-900/40', extract: (rev) => Number(rev?.credit_sales ?? 0) },
-  { key: 'discounts', label: 'Discounts', color: 'bg-red-500', text: 'text-red-500 dark:text-red-500', track: 'bg-red-100 dark:bg-red-100/40', extract: (rev) => Number(rev?.discounts ?? 0) },
+  { key: 'till', label: 'Till (at sale)', color: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400', track: 'bg-emerald-100 dark:bg-emerald-900/40', extract: (rev) => Number(rev?.till ?? 0) },
+  { key: 'debt_collected', label: 'Debt Collected', color: 'bg-blue-500', text: 'text-blue-700 dark:text-blue-400', track: 'bg-blue-100 dark:bg-blue-900/40', extract: (rev) => Number(rev?.debt_collected ?? 0) },
 ]
 
 const PAYMENT_METHOD_BUCKETS = [
   { key: 'cash', label: 'Cash', color: 'bg-emerald-500', text: 'text-emerald-700 dark:text-emerald-400', track: 'bg-emerald-100 dark:bg-emerald-900/40' },
   { key: 'mpesa', label: 'M-Pesa', color: 'bg-blue-500', text: 'text-blue-700 dark:text-blue-400', track: 'bg-blue-100 dark:bg-blue-900/40' },
   { key: 'insurance', label: 'Insurance', color: 'bg-purple-500', text: 'text-purple-700 dark:text-purple-400', track: 'bg-purple-100 dark:bg-purple-900/40' },
-  { key: 'credit', label: 'Credit', color: 'bg-amber-500', text: 'text-amber-700 dark:text-amber-400', track: 'bg-amber-100 dark:bg-amber-900/40' },
   { key: 'other', label: 'Other', color: 'bg-gray-500', text: 'text-gray-700 dark:text-gray-300', track: 'bg-gray-100 dark:bg-gray-700/40' },
 ]
 
@@ -59,8 +58,8 @@ const PAYMENT_METHODS = [
   { key: 'cash', label: 'Cash' },
   { key: 'mpesa', label: 'M-Pesa' },
   { key: 'insurance', label: 'Insurance' },
+  { key: 'credit', label: 'Credit' },
   { key: 'other', label: 'Other' },
-  { key: 'balance', label: 'Balance Settlement' },
 ]
 
 // ─── Add this with the other constants near the top of the file ─────────────
@@ -323,22 +322,26 @@ export default function FinanceTab() {
 
 function OverviewTab() {
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
 
   const qs = buildQuery({ from: range.from, to: range.to })
 
+  const enabled = Boolean(range.from && range.to)
+
   const clinicQ = useQuery({
-    queryKey: ['admin', 'finance-overview', range.from, range.to],
+    queryKey: ['admin', 'overview', 'finance-overview', range.from, range.to],
     queryFn: () => api.get(`/api/admin/finance-overview${qs}`),
     staleTime: 30000,
+    enabled,
   })
 
   const pharmacyQ = useQuery({
-    queryKey: ['admin', 'pharmacy-finance-overview', range.from, range.to],
+    queryKey: ['admin', 'overview', 'pharmacy-finance-overview', range.from, range.to],
     queryFn: () => api.get(`/api/admin/pharmacy/finance-overview${qs}`),
     staleTime: 30000,
+    enabled,
   })
 
   const isLoading = clinicQ.isLoading || pharmacyQ.isLoading
@@ -375,15 +378,21 @@ function OverviewTab() {
           <ErrorState message={error?.message || 'Could not load overview'} onRetry={() => { clinicQ.refetch(); pharmacyQ.refetch() }} />
         ) : (<div className="p-4 sm:p-5">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatTile label="Total Revenue" value={formatMoney(totalRevenue)} icon="dollarSign" color="emerald" />
-            <StatTile label="Clinic Revenue" value={formatMoney(clinicRev)} icon="building" color="blue" sublabel="Consultation, lab, procedures" />
-            <StatTile label="Pharmacy Revenue" value={formatMoney(pharmacyRev)} icon="pillBottle" color="purple" sublabel="OTC & walk-in sales" />
-            <StatTile label="Net Profit" value={formatMoney(net)} icon="trendUp" color={net >= 0 ? 'emerald' : 'red'} sublabel={`After ${formatMoney(totalExpenses)} expenses`} />
+            <StatTile label="Cash Collected" value={formatMoney(totalRevenue)} icon="dollarSign" color="emerald" sublabel="Clinic + pharmacy" />
+            <StatTile label="Clinic" value={formatMoney(clinicRev)} icon="building" color="blue" sublabel="Consultations, lab, procedures" />
+            <StatTile label="Pharmacy" value={formatMoney(pharmacyRev)} icon="pillBottle" color="purple" sublabel="Till + debt repayments" />
+            <StatTile
+              label="Net"
+              value={formatMoney(net)}
+              icon="trendUp"
+              color={net >= 0 ? 'emerald' : 'red'}
+              sublabel={`After ${formatMoney(totalExpenses)} operating expenses — excludes cost of goods`}
+            />
           </div>
 
           <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 gap-5">
             <div className="space-y-3">
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">Revenue Split</p>
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">Collections Split</p>
               <div className="space-y-2">
                 <OverviewSplitBar label="Clinic" amount={clinicRev} total={totalRevenue} color="bg-blue-500" text="text-blue-700 dark:text-blue-400" />
                 <OverviewSplitBar label="Pharmacy" amount={pharmacyRev} total={totalRevenue} color="bg-purple-500" text="text-purple-700 dark:text-purple-400" />
@@ -464,8 +473,8 @@ function ClinicTab() {
 
 function ClinicFinanceOverviewCard() {
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
 
   const qs = buildQuery({ from: range.from, to: range.to })
@@ -474,6 +483,7 @@ function ClinicFinanceOverviewCard() {
     queryKey: ['admin', 'finance-overview', range.from, range.to],
     queryFn: () => api.get(`/api/admin/finance-overview${qs}`),
     staleTime: 30000,
+    enabled: Boolean(range.from && range.to),
   })
 
   const billed = q.data?.billed || {}
@@ -529,8 +539,8 @@ function ClinicOutstandingCard() {
   const queryClient = useQueryClient()
   const { user } = useAuthStore()
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
   const [page, setPage] = useState(1)
   const [modal, setModal] = useState(null)
@@ -706,8 +716,8 @@ function PharmacyTab() {
 
 function PharmacyFinanceOverviewCard() {
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
 
   const qs = buildQuery({ from: range.from, to: range.to })
@@ -716,10 +726,17 @@ function PharmacyFinanceOverviewCard() {
     queryKey: ['admin', 'pharmacy-finance-overview', range.from, range.to],
     queryFn: () => api.get(`/api/admin/pharmacy/finance-overview${qs}`),
     staleTime: 30000,
+    enabled: Boolean(range.from && range.to)
   })
 
   const rev = q.data?.revenue || {}
   const totalRevenue = Number(rev.total ?? 0)
+  const sales = q.data?.sales || {}
+  const totalSales = Number(sales.total ?? 0)
+  const creditExtended = Number(sales.credit_extended ?? 0)
+  const salesDiscounts = Number(sales.discounts ?? 0)
+  const refunded = Number(rev.refunded ?? 0)
+  const netSales = Number(sales.net_sales ?? totalSales)
   const days = Number(q.data?.days_in_range ?? 0) || 1
   const byPaymentMethod = q.data?.by_payment_method || {}
   const exp = q.data?.expenses || {}
@@ -763,14 +780,20 @@ function PharmacyFinanceOverviewCard() {
             {/* Revenue */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">Revenue</p>
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">Cash Collected</p>
                 <p className="text-[10px] text-gray-400">avg {formatMoney(days > 0 ? totalRevenue / days : 0)}/day</p>
               </div>
-              <p className="text-[24px] font-extrabold tabular-nums text-emerald-700 dark:text-emerald-400">
-                {formatMoney(totalRevenue)}
-              </p>
+              <div className="flex items-baseline gap-3 flex-wrap">
+                <p className="text-[24px] font-extrabold tabular-nums text-emerald-700 dark:text-emerald-400">
+                  {formatMoney(totalRevenue)}
+                </p>
+                <p className="text-[12px] text-gray-500 dark:text-gray-400 tabular-nums">
+                  {formatMoney(totalSales)} sold
+                  {netSales !== totalSales && ` · ${formatMoney(netSales)} net of returns`}
+                </p>
+              </div>
               {totalRevenue === 0 ? (
-                <p className="text-[11px] text-gray-400">No pharmacy sales in this period.</p>
+                <p className="text-[11px] text-gray-400">No cash collected in this period.</p>
               ) : (
                 <div className="space-y-2.5">
                   {revBuckets.map((b) => {
@@ -795,14 +818,32 @@ function PharmacyFinanceOverviewCard() {
                 </div>
               )}
 
-              {/* Credit summary */}
+              <div className="pt-1 space-y-1">
+                {creditExtended > 0 && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 tabular-nums">
+                    {formatMoney(creditExtended)} sold on credit this period — not yet collected
+                  </p>
+                )}
+                {salesDiscounts > 0 && (
+                  <p className="text-[11px] text-fuchsia-600 dark:text-fuchsia-400 tabular-nums">
+                    −{formatMoney(salesDiscounts)} in discounts
+                  </p>
+                )}
+                {refunded > 0 && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 tabular-nums">
+                    −{formatMoney(refunded)} refunded to customers this period
+                  </p>
+                )}
+              </div>
+
+              {/* Receivable position — a running balance, not a period figure */}
               <div className="mt-4 rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 p-3">
                 <div className="flex items-center justify-between text-[12px]">
-                  <span className="text-amber-800 dark:text-amber-300 font-medium">Credit Outstanding</span>
+                  <span className="text-amber-800 dark:text-amber-300 font-medium">Total Debt Owed</span>
                   <span className="tabular-nums font-bold text-amber-700 dark:text-amber-400">{formatMoney(outstanding.balance ?? 0)}</span>
                 </div>
                 <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
-                  {formatMoney(outstanding.total_credit ?? 0)} extended &middot; {formatMoney(outstanding.total_collected ?? 0)} collected
+                  {formatMoney(outstanding.total_credit ?? 0)} extended all-time · {formatMoney(outstanding.total_collected ?? 0)} repaid
                 </p>
               </div>
             </div>
@@ -848,7 +889,7 @@ function PharmacyFinanceOverviewCard() {
           <div className="mt-6 pt-5 border-t border-gray-200 dark:border-gray-700/60">
             <div className="flex items-center justify-between mb-3">
               <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400">Revenue by Payment Method</p>
-              <p className="text-[10px] text-gray-400">{formatMoney(totalByMethod)} recorded</p>
+              <p className="text-[10px] text-gray-400">{formatMoney(totalByMethod)} at the till</p>
             </div>
             {totalByMethod === 0 ? (
               <p className="text-[11px] text-gray-400">No payments collected in this period.</p>
@@ -897,6 +938,7 @@ function PharmacyDebtBookCard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-debt-book'] })
       queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-finance-overview'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-sales'] })
       toast.success('Payment recorded')
     },
     onError: (e) => toast.error(e.message || 'Could not record payment'),
@@ -985,13 +1027,15 @@ function PharmacyDebtBookCard() {
 
 function PharmacySalesSubTab() {
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
   const [page, setPage] = useState(1)
   const [method, setMethod] = useState('all')
   const [search, setSearch] = useState('')
   const [detail, setDetail] = useState(null)
+  const [returnSale, setReturnSale] = useState(null)
+  const queryClient = useQueryClient()
 
   useEffect(() => {
     setPage(1)
@@ -1012,10 +1056,26 @@ function PharmacySalesSubTab() {
     staleTime: 15000,
   })
 
+
+
   const sales = Array.isArray(q.data?.sales) ? q.data.sales : []
   const pages = q.data?.pages || 1
   const curPage = q.data?.page || page
 
+  const returnMutation = useMutation({
+    mutationFn: ({ saleId, body }) => api.post(`/api/pharmacy/otc-sales/${saleId}/return`, body),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-sales'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-finance-overview'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'pharmacy-debt-book'] })
+      const parts = []
+      if (res.return.cash_refund_amount > 0) parts.push(`${formatMoney(res.return.cash_refund_amount)} cash`)
+      if (res.return.credit_note_amount > 0) parts.push(`${formatMoney(res.return.credit_note_amount)} off their debt`)
+      toast.success(`${res.return.return_number} — refund ${parts.join(' + ')}`)
+      setReturnSale(null)
+    },
+    onError: (e) => toast.error(e.message || 'Could not process return'),
+  })
   return (
     <div className="space-y-4">
       <Card className="overflow-hidden">
@@ -1069,7 +1129,14 @@ function PharmacySalesSubTab() {
                 {sales.map((s) => (
                   <tr key={s.id} className="hover:bg-gray-50/50 dark:hover:bg-gray-700/20">
                     <td className="px-4 py-3">
-                      <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{s.receipt_number}</p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{s.receipt_number}</p>
+                        {s.returns?.length > 0 && (
+                          <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                            Returned
+                          </Badge>
+                        )}
+                      </div>
                       <p className="text-[10px] text-gray-400">{s.items?.length || 0} item{s.items?.length === 1 ? '' : 's'}</p>
                     </td>
                     <td className="px-4 py-3">
@@ -1079,11 +1146,20 @@ function PharmacySalesSubTab() {
                     <td className="px-4 py-3 text-right">
                       <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 tabular-nums">{formatMoney(s.total)}</p>
                       {s.discount_amount > 0 && (
-                        <p className="text-[10px] text-fuchsia-600 dark:text-fuchsia-400 tabular-nums">&minus;{formatMoney(s.discount_amount)} disc</p>
+                        <p className="text-[10px] text-fuchsia-600 dark:text-fuchsia-400 tabular-nums">−{formatMoney(s.discount_amount)} disc</p>
+                      )}
+                      {s.returns?.length > 0 && (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-400 tabular-nums">
+                          −{formatMoney(s.returns.reduce((t, r) => t + r.refund_amount, 0))} refunded
+                        </p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-center">
-                      <Badge className={badgeClass(s.payment_method)}>{cap(s.payment_method)}</Badge>
+                      <div className="inline-flex items-center gap-1 flex-wrap justify-center">
+                        {(s.methods?.length ? s.methods : [s.payment_method]).map((m) => (
+                          <Badge key={m} className={badgeClass(m)}>{cap(m)}</Badge>
+                        ))}
+                      </div>
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell text-[12px] text-gray-500 dark:text-gray-400">{formatDateTime(s.sold_at)}</td>
                     <td className="px-4 py-3 text-right">
@@ -1103,27 +1179,63 @@ function PharmacySalesSubTab() {
         <Pagination page={curPage} pages={pages} onPage={setPage} />
       </Card>
 
-      {detail && <PharmacySaleDetailModal sale={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <PharmacySaleDetailModal
+          sale={detail}
+          onClose={() => setDetail(null)}
+          onReturn={() => { setReturnSale(detail); setDetail(null) }}
+        />
+      )}
+
+      {returnSale && (
+        <ReturnModal
+          sale={returnSale}
+          loading={returnMutation.isPending}
+          onClose={() => setReturnSale(null)}
+          onSubmit={(body) => returnMutation.mutate({ saleId: returnSale.id, body })}
+        />
+      )}
     </div>
   )
 }
 
-function PharmacySaleDetailModal({ sale, onClose }) {
+function PharmacySaleDetailModal({ sale, onClose, onReturn }) {
+  const anyReturnable = (sale.items || []).some((i) => (i.returnable_qty ?? i.quantity) > 0)
+  // Admins get 7 days; the server enforces the same window.
+  const ageDays = Math.floor((Date.now() - new Date(sale.sold_at)) / 86400000)
+  const withinWindow = ageDays <= 7
+
   return (
     <ModalShell
       title={`Receipt ${sale.receipt_number}`}
-      subtitle={`${sale.customer_name} &middot; ${formatDateTime(sale.sold_at)}`}
+      subtitle={`${sale.customer_name} · ${formatDateTime(sale.sold_at)}`}
       onClose={onClose}
       maxWidth="max-w-lg"
       footer={
-        <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white">
-          Close
-        </button>
+        <>
+          {anyReturnable && (
+            <button
+              type="button"
+              onClick={onReturn}
+              disabled={!withinWindow}
+              title={withinWindow ? 'Reverse part or all of this sale' : `This sale is ${ageDays} days old — returns close after 7 days`}
+              className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-amber-200 dark:border-amber-900/50 text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 inline-flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed mr-auto"
+            >
+              <Icon name="arrowLeft" size={13} /> Process Return
+            </button>
+          )}
+          <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white">
+            Close
+          </button>
+        </>
       }
     >
       <div className="space-y-4">
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge className={badgeClass(sale.payment_method)}>{cap(sale.payment_method)}</Badge>
+          {(sale.methods?.length ? sale.methods : [sale.payment_method]).map((m) => (
+            <Badge key={m} className={badgeClass(m)}>{cap(m)}</Badge>
+          ))}
+          {sale.is_split && <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400">Split payment</Badge>}
           {sale.discount_amount > 0 && <Badge className="bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400">Discounted</Badge>}
         </div>
 
@@ -1186,6 +1298,24 @@ function PharmacySaleDetailModal({ sale, onClose }) {
             <p className="text-[12px] text-gray-400">No payment records.</p>
           )}
         </div>
+        {sale.returns?.length > 0 && (
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 dark:text-gray-400 mb-2">Returns</p>
+            <div className="space-y-2">
+              {sale.returns.map((r) => (
+                <div key={r.id} className="rounded-lg border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-950/20 p-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-[12px] font-medium text-amber-800 dark:text-amber-300">{r.return_number}</p>
+                    <p className="text-[12px] font-semibold text-amber-700 dark:text-amber-400 tabular-nums">−{formatMoney(r.refund_amount)}</p>
+                  </div>
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                    {r.reason} · {r.returned_by || 'unknown'} · {formatDateTime(r.created_at)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </ModalShell>
   )
@@ -1212,8 +1342,8 @@ function PharmacyDebtModal({ customer, loading, onClose, onSubmit }) {
       return
     }
     const amt = Number(amount)
-    if (!Number.isFinite(amt) || amt <= 0) {
-      toast.error('Amount must be positive')
+    if (!Number.isInteger(amt) || amt <= 0) {
+      toast.error('Amount must be a positive whole number')
       return
     }
     if (amt > customer.balance) {
@@ -1222,7 +1352,7 @@ function PharmacyDebtModal({ customer, loading, onClose, onSubmit }) {
     }
     await onSubmit({
       customer_id: customer.id,
-      amount: Math.round(amt),
+      amount: amt,
       method,
       reference: reference.trim() || null,
     })
@@ -1252,8 +1382,8 @@ function PharmacyDebtModal({ customer, loading, onClose, onSubmit }) {
         <Field label="Amount (KSh) *">
           <input
             type="number"
-            min="0"
-            step="any"
+            min="1"
+            step="1"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
             placeholder={`Max ${formatMoney(customer.balance)}`}
@@ -1652,7 +1782,7 @@ function FollowUpModal({ row, action, loading, onClose, onSubmit }) {
             <Field label="Amount collected (KSh) *">
               <input
                 type="number"
-                min="0"
+                min="1"
                 step="1"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
@@ -1693,7 +1823,7 @@ function FollowUpModal({ row, action, loading, onClose, onSubmit }) {
             <Field label="Amount to waive (KSh)" hint={`Leave blank to waive the full ${formatMoney(balance)}`}>
               <input
                 type="number"
-                min="0"
+                min="1"
                 max={balance}
                 step="1"
                 value={amount}
@@ -1727,8 +1857,8 @@ function FollowUpModal({ row, action, loading, onClose, onSubmit }) {
 function BillingSubTab() {
   const [selectedBill, setSelectedBill] = useState(null)
   const [range, setRange] = useState(() => {
-    const r = presetToRange('30d')
-    return { range: '30d', from: r.from, to: r.to }
+    const r = presetToRange('today')
+    return { range: 'today', from: r.from, to: r.to }
   })
   const [page, setPage] = useState(1)
 

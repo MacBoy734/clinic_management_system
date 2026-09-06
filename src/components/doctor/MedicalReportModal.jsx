@@ -30,6 +30,9 @@ const FLAG_CLASS = {
   low: 'font-bold text-amber-600',
   high: 'font-bold text-red-700',
   abnormal: 'font-bold text-red-700',
+  // Critical values need to stand out on paper, not just read as "high".
+  critical_low: 'font-bold text-red-700 underline decoration-2',
+  critical_high: 'font-bold text-red-700 underline decoration-2',
 }
 
 export function MedicalReportModal({ visitId, onClose }) {
@@ -98,7 +101,7 @@ export function MedicalReportModal({ visitId, onClose }) {
 
   if (!mounted) return null
 
-  const patient = { gender: visit?.patient_gender, age: visit?.patient_age }
+  const patient = { gender: visit?.patient_gender, age: visit?.patient_age, age_unit: visit?.patient_age_unit || 'years' }
 
   // Vitals rows — only render what was recorded
   const vitalsRows = visit ? [
@@ -572,6 +575,7 @@ function LabResultBlock({ item, patient }) {
             key={si}
             section={section}
             values={item.result_data || {}}
+            applied={item.applied_ranges || {}}
             patient={patient}
           />
         ))
@@ -594,19 +598,22 @@ function LabResultBlock({ item, patient }) {
 }
 
 // Template section rows — same evaluateField contract as the lab report.
-function ReportLabSection({ section, values, patient }) {
+function ReportLabSection({ section, values, applied, patient }) {
   const fields = section.fields || []
 
   const evaluated = fields.map((f) => {
     if (['textarea', 'sensitivity'].includes(f.input_type)) return { f }
     const raw = values[f.key]
     const has = raw != null && raw !== ''
-    const { status, range } = evaluateField(f, raw, patient)
+    const snap = applied?.[f.key]
+    const ev = snap
+      ? evaluateField(f, raw, patient, { band: snap })
+      : evaluateField(f, raw, patient)
     return {
       f,
       display: has ? `${raw}${f.unit ? ` ${f.unit}` : ''}` : '—',
-      status: has ? status : null,
-      range: range || f.reference_range || null,
+      status: has ? ev.status : null,
+      range: snap?.range || ev.range || null,
     }
   })
   const showRef = evaluated.some((e) => e.range)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query'
 import api from '@/lib/api'
@@ -15,7 +15,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 
 const SUB_TABS = [
-  { key: 'product', label: 'Product Stock', icon: 'box' },
+  { key: 'product', label: 'pharmacy Stock', icon: 'box' },
   { key: 'lab', label: 'Lab Stock', icon: 'flask' },
   { key: 'restocks', label: 'Restock Verification', icon: 'checkCircle' },
 ]
@@ -147,7 +147,7 @@ function getNearestBatch(item) {
 }
 
 export default function InventoryTab() {
-  const [sub, setSub] = useState('lab')
+  const [sub, setSub] = useState('product')
 
   return (
     <div className="space-y-4">
@@ -366,10 +366,10 @@ function LabStockSubTab() {
             disabled={q.isFetching}
             className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
           >
-            <Icon 
-              name="refresh" 
-              size={13} 
-              className={q.isFetching ? 'animate-spin' : ''} 
+            <Icon
+              name="refresh"
+              size={13}
+              className={q.isFetching ? 'animate-spin' : ''}
             />
             {q.isFetching ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -522,36 +522,36 @@ function ProductStockSubTab() {
   const [expiryFilter, setExpiryFilter] = useState('all')
 
   const {
-  data,
-  fetchNextPage,
-  hasNextPage,
-  isFetchingNextPage,
-  isLoading,
-  isError,
-  error,
-  isFetching,
-  refetch,
-} = useInfiniteQuery({
-  queryKey: ['admin', 'drug-stock', search.trim(), categoryFilter, expiryFilter],
-  queryFn: async ({ pageParam = 1 }) => {
-    // Build query string manually — works with ANY api.get() wrapper
-    const query = new URLSearchParams()
-    const s = search.trim()
-    if (s) query.set('search', s)
-    if (categoryFilter !== 'all') query.set('category', categoryFilter)
-    if (expiryFilter !== 'all') query.set('expiry_filter', expiryFilter)
-    query.set('page', String(pageParam))
-    query.set('limit', '20')
+    data,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isLoading,
+    isError,
+    error,
+    isFetching,
+    refetch,
+  } = useInfiniteQuery({
+    queryKey: ['admin', 'drug-stock', search.trim(), categoryFilter, expiryFilter],
+    queryFn: async ({ pageParam = 1 }) => {
+      // Build query string manually — works with ANY api.get() wrapper
+      const query = new URLSearchParams()
+      const s = search.trim()
+      if (s) query.set('search', s)
+      if (categoryFilter !== 'all') query.set('category', categoryFilter)
+      if (expiryFilter !== 'all') query.set('expiry_filter', expiryFilter)
+      query.set('page', String(pageParam))
+      query.set('limit', '20')
 
-    const qs = query.toString()
-    const url = `/api/admin/drug-stock${qs ? '?' + qs : ''}`
+      const qs = query.toString()
+      const url = `/api/admin/drug-stock${qs ? '?' + qs : ''}`
 
-    const data = await api.get(url)
-    return data
-  },
-  getNextPageParam: (lastPage) => lastPage?.nextPage,
-  staleTime: 30000,
-})
+      const data = await api.get(url)
+      return data
+    },
+    getNextPageParam: (lastPage) => lastPage?.nextPage,
+    staleTime: 30000,
+  })
 
   const items = data?.pages.flatMap((p) => p.items) || []
   const totalItems = data?.pages[0]?.total || 0
@@ -596,7 +596,7 @@ function ProductStockSubTab() {
     return d !== null && d >= 0 && d <= 90
   })
 
-    return (
+  return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Product Stock</h3>
@@ -609,10 +609,10 @@ function ProductStockSubTab() {
             disabled={isFetching}
             className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
           >
-            <Icon 
-              name="refresh" 
-              size={13} 
-              className={isFetching ? 'animate-spin' : ''} 
+            <Icon
+              name="refresh"
+              size={13}
+              className={isFetching ? 'animate-spin' : ''}
             />
             {isFetching ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -629,7 +629,7 @@ function ProductStockSubTab() {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input
+          <input
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -1357,14 +1357,22 @@ function RestockVerificationSubTab() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
   const [filter, setFilter] = useState('all')
+  const [page, setPage] = useState(1)
   const [verifying, setVerifying] = useState(null)
   const [rejecting, setRejecting] = useState(null)
 
+  useEffect(() => { setPage(1) }, [filter])
+
+  // Status filters server-side — filtering a single page is not filtering the set.
+  const qs = new URLSearchParams({ page: String(page), limit: '20' })
+  if (filter !== 'all') qs.set('status', filter)
+
   const q = useQuery({
-    queryKey: ['admin', 'restocks'],
-    queryFn: () => api.get('/api/admin/restocks'),
+    queryKey: ['admin', 'restocks', filter, page],
+    queryFn: () => api.get(`/api/admin/restocks?${qs.toString()}`),
     refetchInterval: 30000,
     staleTime: 15000,
+    placeholderData: (prev) => prev,
   })
 
   const verifyMut = useMutation({
@@ -1390,9 +1398,10 @@ function RestockVerificationSubTab() {
   }
   if (q.isError) return <ErrorState message={q.error?.message} onRetry={q.refetch} />
 
-  const all = q.data?.restocks || []
+  const filtered = q.data?.restocks || []
   const stats = q.data?.stats || {}
-  const filtered = filter === 'all' ? all : all.filter((r) => r.status === filter)
+  const total = q.data?.total || 0
+  const pages = q.data?.pages || 1
 
   const handleVerify = async (r, notes, qty, expiryDate) => {
     try {
@@ -1419,17 +1428,17 @@ function RestockVerificationSubTab() {
         <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Restock Verification</h3>
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-gray-500 dark:text-gray-400">
-            {all.length} request{all.length !== 1 ? 's' : ''}
+            {total} request{total !== 1 ? 's' : ''}
           </span>
           <button
             onClick={() => q.refetch()}
             disabled={q.isFetching}
             className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
           >
-            <Icon 
-              name="refresh" 
-              size={13} 
-              className={q.isFetching ? 'animate-spin' : ''} 
+            <Icon
+              name="refresh"
+              size={13}
+              className={q.isFetching ? 'animate-spin' : ''}
             />
             {q.isFetching ? 'Refreshing…' : 'Refresh'}
           </button>
@@ -1440,12 +1449,14 @@ function RestockVerificationSubTab() {
         <StatTile label="Pending" value={stats.pending ?? 0} icon="alert" color="amber" sublabel={formatMoney(stats.pending_value ?? 0)} />
         <StatTile label="Approved" value={stats.approved ?? 0} icon="checkCircle" color="green" sublabel="added to stock" />
         <StatTile label="Rejected" value={stats.rejected ?? 0} icon="xCircle" color="red" sublabel="no stock added" />
-        <StatTile label="Total" value={all.length} icon="box" color="blue" sublabel="all requests" />
+        <StatTile label="Total" value={(stats.pending ?? 0) + (stats.approved ?? 0) + (stats.rejected ?? 0)} icon="box" color="blue" sublabel="all requests" />
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
         {['all', 'pending', 'approved', 'rejected'].map((f) => {
-          const count = f === 'all' ? all.length : all.filter((r) => r.status === f).length
+          const count = f === 'all'
+            ? (stats.pending ?? 0) + (stats.approved ?? 0) + (stats.rejected ?? 0)
+            : (stats[f] ?? 0)
           return (
             <button key={f} onClick={() => setFilter(f)}
               className={['px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
@@ -1472,7 +1483,7 @@ function RestockVerificationSubTab() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{r.item_name}</p>
+                        <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{r.item_name || '—'}</p>
                         <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-300">{cap(r.department)}</Badge>
                         <Badge className={badgeClass(r.status)}>{cap(r.status)}</Badge>
                       </div>
@@ -1480,7 +1491,7 @@ function RestockVerificationSubTab() {
                         Requested by {r.requested_by} · {timeAgo(r.requested_at)}
                       </p>
                       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 text-[11px]">
-                        <div><span className="text-gray-400">Current:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.current_stock}</span></div>
+                        <div><span className="text-gray-400">Current:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.current_stock ?? '—'} {r.unit || ''}</span></div>
                         <div><span className="text-gray-400">Requested:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{r.quantity}</span></div>
                         <div><span className="text-gray-400">Supplier:</span> <span className="text-gray-700 dark:text-gray-300">{r.supplier || '—'}</span></div>
                         <div><span className="text-gray-400">Expiry:</span> <span className="text-gray-700 dark:text-gray-300">{formatDate(r.expiry_date)}</span></div>
@@ -1511,6 +1522,30 @@ function RestockVerificationSubTab() {
         </div>
       )}
 
+      {pages > 1 && (
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+            Page <span className="font-semibold">{page}</span> of <span className="font-semibold">{pages}</span>
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ‹ Prev
+            </button>
+            <button
+              onClick={() => setPage((p) => Math.min(pages, p + 1))}
+              disabled={page >= pages}
+              className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next ›
+            </button>
+          </div>
+        </div>
+      )}
+
       {verifying && (
         <RestockVerifyModal restock={verifying} loading={verifyMut.isPending} onClose={() => setVerifying(null)} onConfirm={handleVerify} />
       )}
@@ -1523,13 +1558,13 @@ function RestockVerificationSubTab() {
 
 function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
   const [notes, setNotes] = useState('')
-  const [qty, setQty] = useState(String(restock.received_qty || restock.quantity || 0))
+    const [qty, setQty] = useState(String(restock.quantity || 0))
   const [expiryDate, setExpiryDate] = useState(
     restock.expiry_date ? new Date(restock.expiry_date).toISOString().slice(0, 10) : ''
   )
 
   return (
-    <ModalShell title="Verify Restock" subtitle={`${restock.item_name} · ${cap(restock.department)}`} onClose={loading ? undefined : onClose}
+    <ModalShell title="Verify Restock" subtitle={`${restock.product?.name} · ${cap(restock.department)}`} onClose={loading ? undefined : onClose}
       footer={
         <div className="flex justify-end gap-2">
           <button onClick={onClose} disabled={loading} className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50">Cancel</button>
@@ -1540,7 +1575,7 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
       }>
       <div className="space-y-3">
         <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 p-3 space-y-1.5 text-[12px]">
-          <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock}</span></div>
+                    <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock ?? '—'} {restock.unit || ''}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Requested qty:</span><span className="font-medium">{restock.quantity}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Supplier:</span><span className="font-medium">{restock.supplier || '—'}</span></div>
         </div>

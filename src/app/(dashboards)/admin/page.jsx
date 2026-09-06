@@ -22,6 +22,7 @@ const PIPELINE = [
   { key: 'lab', label: 'Lab', color: 'purple' },
   { key: 'pharmacy', label: 'Pharmacy', color: 'cyan' },
   { key: 'billing', label: 'Billing', color: 'orange' },
+  { key: 'partially_paid', label: 'Unpaid', color: 'red' },
   { key: 'done', label: 'Done', color: 'green' },
 ]
 
@@ -33,6 +34,7 @@ const PIPELINE_BG = {
   orange: 'bg-orange-50 border-orange-200 dark:bg-orange-950/30 dark:border-orange-900/50 text-orange-700 dark:text-orange-400',
   green: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/50 text-emerald-700 dark:text-emerald-400',
   slate: 'bg-slate-50 border-slate-200 dark:bg-slate-800/40 dark:border-slate-700/50 text-slate-700 dark:text-slate-300',
+  red: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50 text-red-700 dark:text-red-400',
 }
 
 const ROLE_BADGES = {
@@ -170,12 +172,14 @@ export default function OverviewTab() {
             </div>
           </div>
           <p className="text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-400">{pendingPayments}</p>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">{formatMoney(pendingAmount)} outstanding</p>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
+            {formatMoney(pendingAmount)} outstanding · all time
+          </p>
         </Card>
 
         <Card className="p-4">
           <div className="flex items-start justify-between mb-2">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Staff on Duty</p>
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Active Staff</p>
             <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400">
               <Icon name="stethoscope" size={18} />
             </div>
@@ -190,7 +194,7 @@ export default function OverviewTab() {
 
       {/* Two-col: staff on duty + recent activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <StaffOnDutyCard staff={staffOnDuty} />
+        <ActiveStaffCard staff={staffOnDuty}/>
         <RecentActivityCard activity={activity} />
       </div>
 
@@ -237,12 +241,12 @@ function PipelineCard({ pipeline }) {
 }
 
 // ─── Staff on Duty ───────────────────────────────────────────────
-function StaffOnDutyCard({ staff }) {
+function ActiveStaffCard({ staff }) {
   return (
     <Card className="flex flex-col">
-      <CardHeader title="Staff on Duty" subtitle={`${staff.length} active`} />
+      <CardHeader title="Active Staff" subtitle={`${staff.length} active`} />
       {staff.length === 0 ? (
-        <EmptyState icon="users" title="No staff on duty" description="Active staff will appear here." />
+        <EmptyState icon="users" title="No Active Staff" description="Active staff will appear here." />
       ) : (
         <div className="p-3 space-y-2 max-h-96 overflow-y-auto">
           {staff.map((s) => {
