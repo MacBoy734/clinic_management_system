@@ -1115,7 +1115,7 @@ function SecurityTab() {
           <EmptyState icon="shield" title="No active sessions" description="Active user logins will appear here." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[640px]">
+            <table className="w-full min-w-160">
               <thead>
                 <tr className="text-left text-[11px] font-semibold uppercase tracking-wider text-gray-400 border-b border-gray-200 dark:border-gray-700/60">
                   <th className="px-4 py-2">User</th>

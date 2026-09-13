@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/authStore'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, Icon,
   SkeletonCard, SkeletonTable, SkeletonList, Spinner,
-  formatMoney, formatDate, timeAgo, cap, badgeClass,
+  formatMoney, formatDate, timeAgo, cap, badgeClass, DATE_RANGE_PRESETS, getDateRangePreset
 } from '@/utils/helpers'
 import Link from 'next/link'
 import jsPDF from 'jspdf'
@@ -18,6 +18,8 @@ const SUB_TABS = [
   { key: 'product', label: 'pharmacy Stock', icon: 'box' },
   { key: 'lab', label: 'Lab Stock', icon: 'flask' },
   { key: 'restocks', label: 'Restock Verification', icon: 'checkCircle' },
+  { key: 'stocktake', label: 'Stocktake Review', icon: 'clipboard' },
+  { key: 'orders', label: 'Department Orders', icon: 'box' },
 ]
 
 const CATEGORY_BADGES = {
@@ -171,6 +173,8 @@ export default function InventoryTab() {
       {sub === 'lab' && <LabStockSubTab />}
       {sub === 'product' && <ProductStockSubTab />}
       {sub === 'restocks' && <RestockVerificationSubTab />}
+      {sub === 'stocktake' && <StocktakeReviewSubTab />}
+      {sub === 'orders' && <DepartmentOrdersSubTab />}
     </div>
   )
 }
@@ -1013,6 +1017,832 @@ function RestockModal({ title, subtitle, item, loading, onClose, onConfirm }) {
   )
 }
 
+const ORDER_DATE_PRESET_KEYS = new Set([
+  'all', 'today', 'yesterday', 'this_week', 'this_month', 'custom',
+])
+const ORDER_DATE_PRESETS = DATE_RANGE_PRESETS.filter(({ key }) => ORDER_DATE_PRESET_KEYS.has(key))
+
+function DepartmentOrdersSubTab() {
+  const [status, setStatus] = useState('all')
+  const [department, setDepartment] = useState('all')
+  const [dateFilter, setDateFilter] = useState({
+    preset: 'all',
+    ...getDateRangePreset('all'),
+  })
+  const [page, setPage] = useState(1)
+
+  useEffect(() => {
+    setPage(1)
+  }, [status, department, dateFilter.from, dateFilter.to])
+
+  const params = new URLSearchParams({ page: String(page), limit: '20' })
+  if (status !== 'all') params.set('status', status)
+  if (department !== 'all') params.set('department', department)
+  if (dateFilter.from && dateFilter.to) {
+    params.set('from', dateFilter.from)
+    params.set('to', dateFilter.to)
+  }
+  const hasIncompleteDateRange = Boolean(dateFilter.from) !== Boolean(dateFilter.to)
+
+  const setDatePreset = (preset) => {
+    if (preset === 'custom') {
+      const fallback = getDateRangePreset('today')
+      setDateFilter((current) => ({
+        preset,
+        from: current.from || fallback.from,
+        to: current.to || fallback.to,
+      }))
+      return
+    }
+    setDateFilter({ preset, ...getDateRangePreset(preset) })
+  }
+
+  const q = useQuery({
+    queryKey: ['admin', 'internal-orders', status, department, dateFilter.from, dateFilter.to, page],
+    queryFn: () => api.get(`/api/admin/internal-orders?${params.toString()}`),
+    refetchInterval: 30000,
+    staleTime: 15000,
+    placeholderData: (previous) => previous,
+    enabled: !hasIncompleteDateRange,
+  })
+
+  if (q.isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, index) => <SkeletonCard key={index} />)}
+        </div>
+        <SkeletonList items={4} />
+      </div>
+    )
+  }
+
+  if (q.isError) {
+    return <ErrorState message={q.error?.message || 'Could not load department orders'} onRetry={q.refetch} />
+  }
+
+  const orders = Array.isArray(q.data?.orders) ? q.data.orders : []
+  const stats = q.data?.stats || {}
+  const total = Number(q.data?.total ?? 0)
+  const pages = Number(q.data?.pages ?? 1)
+
+  const statusClass = {
+    pending: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+    fulfilled: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+    cancelled: 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
+  }
+
+  const departmentClass = {
+    doctor: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+    lab: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Department Orders</h3>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Supply requests from the doctor and laboratory teams. Fulfilment is handled by pharmacy.
+          </p>
+        </div>
+        <button
+          onClick={() => q.refetch()}
+          disabled={q.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon name="refresh" size={13} className={q.isFetching ? 'animate-spin' : ''} />
+          {q.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatTile label="Pending" value={stats.pending ?? 0} icon="alert" color="amber" sublabel="awaiting pharmacy" />
+        <StatTile label="Fulfilled" value={stats.fulfilled ?? 0} icon="checkCircle" color="green" sublabel="issued to department" />
+        <StatTile label="Cancelled" value={stats.cancelled ?? 0} icon="xCircle" color="red" sublabel="not issued" />
+        <StatTile label="All Orders" value={stats.total ?? 0} icon="box" color="blue" sublabel="doctor and lab" />
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {['all', 'pending', 'fulfilled', 'cancelled'].map((value) => (
+          <button
+            key={value}
+            onClick={() => setStatus(value)}
+            className={[
+              'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+              status === value
+                ? 'bg-[#1a6cbf] text-white'
+                : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+            ].join(' ')}
+          >
+            {value === 'all' ? 'All' : cap(value)}
+            {value !== 'all' && ` (${stats[value] ?? 0})`}
+          </button>
+        ))}
+
+        <div className="h-5 w-px bg-gray-200 dark:bg-gray-700/60 mx-1" />
+
+        {[
+          { key: 'all', label: 'All Departments' },
+          { key: 'doctor', label: 'Doctor' },
+          { key: 'lab', label: 'Lab' },
+        ].map((option) => (
+          <button
+            key={option.key}
+            onClick={() => setDepartment(option.key)}
+            className={[
+              'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+              department === option.key
+                ? 'bg-gray-800 dark:bg-gray-100 text-white dark:text-gray-900'
+                : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+            ].join(' ')}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <span className="text-[11px] font-semibold text-gray-400 mr-1">Requested:</span>
+        {ORDER_DATE_PRESETS.map((option) => (
+          <button
+            key={option.key}
+            onClick={() => setDatePreset(option.key)}
+            className={[
+              'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+              dateFilter.preset === option.key
+                ? 'bg-[#1a6cbf] text-white'
+                : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+            ].join(' ')}
+          >
+            {option.label}
+          </button>
+        ))}
+
+        {dateFilter.preset === 'custom' && (
+          <div className="flex items-center gap-1.5 ml-1">
+            <input
+              type="date"
+              value={dateFilter.from}
+              onChange={(event) => setDateFilter((current) => ({ ...current, preset: 'custom', from: event.target.value }))}
+              className="h-8 px-2 text-[12px] rounded-md border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-700 dark:text-gray-200"
+              aria-label="Requested from date"
+            />
+            <span className="text-[11px] text-gray-400">→</span>
+            <input
+              type="date"
+              value={dateFilter.to}
+              min={dateFilter.from || undefined}
+              onChange={(event) => setDateFilter((current) => ({ ...current, preset: 'custom', to: event.target.value }))}
+              className="h-8 px-2 text-[12px] rounded-md border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-700 dark:text-gray-200"
+              aria-label="Requested to date"
+            />
+          </div>
+        )}
+
+        {hasIncompleteDateRange && (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400">Select both custom dates to apply the filter.</p>
+        )}
+      </div>
+
+      {!orders.length ? (
+        <EmptyState
+          icon="box"
+          title="No department orders"
+          description="Supply requests raised by doctors and lab staff will appear here."
+        />
+      ) : (
+        <div className="space-y-3">
+          {orders.map((order) => {
+            const isPending = order.status === 'pending'
+            const itemCount = order.items?.length ?? 0
+
+            return (
+              <Card key={order.id} className="p-4">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div className={[
+                      'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
+                      order.department === 'lab'
+                        ? 'bg-purple-100 dark:bg-purple-900/40 text-purple-600 dark:text-purple-400'
+                        : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400',
+                    ].join(' ')}>
+                      <Icon name={order.department === 'lab' ? 'flask' : 'user'} size={18} />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+                          Order #{order.id}
+                        </p>
+                        <Badge className={departmentClass[order.department] || 'bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-300'}>
+                          {order.department === 'lab' ? 'Lab' : 'Doctor'}
+                        </Badge>
+                        <Badge className={statusClass[order.status] || badgeClass(order.status)}>
+                          {cap(order.status)}
+                        </Badge>
+                      </div>
+
+                      <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+                        Requested by {order.requested_by || 'Unknown'} · {timeAgo(order.requested_at)} · {itemCount} item{itemCount === 1 ? '' : 's'}
+                      </p>
+
+                      <div className="mt-3 rounded-lg border border-gray-100 dark:border-gray-700/60 divide-y divide-gray-100 dark:divide-gray-700/60 overflow-hidden">
+                        {(order.items || []).map((item) => (
+                          <div key={item.id} className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]">
+                            <div className="min-w-0">
+                              <p className="font-medium text-gray-700 dark:text-gray-200 truncate">{item.name}</p>
+                              {item.notes && <p className="text-[10px] text-gray-400 mt-0.5 truncate">{item.notes}</p>}
+                            </div>
+                            <div className="shrink-0 text-right">
+                              <p className="font-semibold tabular-nums text-gray-800 dark:text-gray-100">
+                                {isPending ? item.quantity : `${item.fulfilled_qty ?? 0} / ${item.quantity}`}
+                              </p>
+                              <p className="text-[10px] text-gray-400">
+                                {isPending ? 'requested' : 'issued / requested'}{item.unit ? ` ${item.unit}` : ''}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {order.notes && (
+                        <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2 italic">“{order.notes}”</p>
+                      )}
+
+                      {!isPending && (
+                        <p className="text-[11px] text-gray-400 mt-2">
+                          {order.status === 'fulfilled'
+                            ? `Fulfilled by ${order.fulfilled_by || 'Pharmacy'} · ${timeAgo(order.fulfilled_at)}`
+                            : `Cancelled by ${order.cancelled_by || 'Pharmacy'} · ${timeAgo(order.cancelled_at)}`}
+                          {order.cancel_reason ? ` — ${order.cancel_reason}` : ''}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
+      )}
+
+      {pages > 1 && (
+        <div className="flex items-center justify-between pt-1">
+          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+            {total} matching order{total === 1 ? '' : 's'} · Page <span className="font-semibold">{page}</span> of <span className="font-semibold">{pages}</span>
+          </p>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page === 1 || q.isFetching}
+              className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              ‹ Prev
+            </button>
+            <button
+              onClick={() => setPage((current) => Math.min(pages, current + 1))}
+              disabled={page >= pages || q.isFetching}
+              className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Next ›
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Sub-tab 5: Stocktake Review ────────────────────────────────
+// Append this whole block to the end of InventoryTab.jsx. It reuses
+// ModalShell, Field, StatTile, Th, inputCls and the shared helpers
+// already imported at the top of that file.
+
+const STOCKTAKE_STATUS = {
+  in_progress: { label: 'Counting', cls: badgeClass('in_progress') },
+  submitted: { label: 'Awaiting review', cls: badgeClass('pending') },
+  approved: { label: 'Approved', cls: badgeClass('done') },
+}
+
+const STOCKTAKE_FILTERS = ['all', 'submitted', 'in_progress', 'approved']
+
+function StocktakeReviewSubTab() {
+  const queryClient = useQueryClient()
+  const [filter, setFilter] = useState('all')
+  const [reviewing, setReviewing] = useState(null)
+  const [rejecting, setRejecting] = useState(null)
+
+  const q = useQuery({
+    queryKey: ['admin', 'stocktake'],
+    queryFn: () => api.get('/api/pharmacy/stocktake'),
+    refetchInterval: 30000,
+    staleTime: 15000,
+  })
+
+  const approveMut = useMutation({
+    mutationFn: ({ id, body }) => api.post(`/api/admin/stocktake/${id}/approve`, body),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'stocktake'] })
+      queryClient.invalidateQueries({ queryKey: ['admin', 'drug-stock'] })
+      queryClient.invalidateQueries({ queryKey: ['pharmacy'] })
+    },
+  })
+
+  const rejectMut = useMutation({
+    mutationFn: ({ id, body }) => api.post(`/api/admin/stocktake/${id}/reject`, body),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['admin', 'stocktake'] }),
+  })
+
+  if (q.isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
+        </div>
+        <SkeletonList items={3} />
+      </div>
+    )
+  }
+  if (q.isError) {
+    return <ErrorState message={q.error?.message || 'Could not load stocktakes'} onRetry={q.refetch} />
+  }
+
+  const sessions = Array.isArray(q.data?.sessions) ? q.data.sessions : []
+  const filtered = filter === 'all' ? sessions : sessions.filter((s) => s.status === filter)
+
+  const awaiting = sessions.filter((s) => s.status === 'submitted')
+  const approved = sessions.filter((s) => s.status === 'approved')
+  const totalMissing = approved.reduce((sum, s) => sum + Math.abs(s.stats?.total_missing || 0), 0)
+  const totalFound = approved.reduce((sum, s) => sum + (s.stats?.total_found || 0), 0)
+
+  const handleReject = async (session, reason) => {
+    try {
+      await rejectMut.mutateAsync({ id: session.id, body: { review_notes: reason } })
+      toast.success(`"${session.label}" returned to pharmacy`)
+      setRejecting(null)
+    } catch (err) {
+      toast.error(err?.response?.data?.error || err.message || 'Could not return the count')
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Stocktake Review</h3>
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+            Physical counts submitted by pharmacy. Approving posts real stock adjustments.
+          </p>
+        </div>
+        <button
+          onClick={() => q.refetch()}
+          disabled={q.isFetching}
+          className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+        >
+          <Icon name="refresh" size={13} className={q.isFetching ? 'animate-spin' : ''} />
+          {q.isFetching ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
+      <LedgerDriftBanner />
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatTile label="Awaiting Review" value={awaiting.length} icon="alert" color="amber" sublabel="submitted by pharmacy" />
+        <StatTile label="Approved" value={approved.length} icon="checkCircle" color="green" sublabel="adjustments posted" />
+        <StatTile label="Units Missing" value={totalMissing} icon="trendDown" color="red" sublabel="across approved counts" />
+        <StatTile label="Units Found" value={totalFound} icon="trendUp" color="purple" sublabel="across approved counts" />
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        {STOCKTAKE_FILTERS.map((f) => {
+          const count = f === 'all' ? sessions.length : sessions.filter((s) => s.status === f).length
+          return (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={[
+                'px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors',
+                filter === f
+                  ? 'bg-[#1a6cbf] text-white'
+                  : 'bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-400',
+              ].join(' ')}
+            >
+              {f === 'all' ? 'All' : STOCKTAKE_STATUS[f]?.label || cap(f)} ({count})
+            </button>
+          )
+        })}
+      </div>
+
+      {!filtered.length ? (
+        <EmptyState
+          icon="clipboard"
+          title="No stocktakes"
+          description="Counts submitted by the pharmacy will appear here for review and approval."
+        />
+      ) : (
+        <div className="space-y-3">
+          {filtered.map((s) => (
+            <StocktakeSessionCard
+              key={s.id}
+              session={s}
+              onReview={() => setReviewing(s)}
+              onReject={() => setRejecting(s)}
+            />
+          ))}
+        </div>
+      )}
+
+      {reviewing && (
+        <StocktakeReviewModal
+          session={reviewing}
+          loading={approveMut.isPending}
+          onClose={() => setReviewing(null)}
+          onApprove={async (notes) => {
+            try {
+              const res = await approveMut.mutateAsync({
+                id: reviewing.id,
+                body: { review_notes: notes || undefined },
+              })
+              toast.success(`Approved — ${res.posted_count} adjustment(s) posted`)
+              setReviewing(null)
+              return null
+            } catch (err) {
+              const body = err?.response?.data ?? err?.data
+              if (body?.failures?.length) return body.failures
+              toast.error(body?.error || err.message || 'Could not approve')
+              return null
+            }
+          }}
+          onReject={() => {
+            setRejecting(reviewing)
+            setReviewing(null)
+          }}
+        />
+      )}
+
+      {rejecting && (
+        <StocktakeRejectModal
+          session={rejecting}
+          loading={rejectMut.isPending}
+          onClose={() => setRejecting(null)}
+          onConfirm={handleReject}
+        />
+      )}
+    </div>
+  )
+}
+
+
+function LedgerDriftBanner() {
+  const q = useQuery({
+    queryKey: ['admin', 'logs', 'ledger-drift'],
+    queryFn: () => api.get('/api/admin/logs?category=stock&search=Stock%20Ledger%20Drift&limit=5'),
+    staleTime: 300000,
+    retry: false,
+  })
+
+  const logs = Array.isArray(q.data?.logs) ? q.data.logs : []
+  const recent = logs.filter(
+    (l) => Date.now() - new Date(l.timestamp).getTime() < 48 * 60 * 60 * 1000
+  )
+  if (!recent.length) return null
+
+  return (
+    <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-3 flex items-start gap-2">
+      <Icon name="alert" size={14} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+      <div className="min-w-0">
+        <p className="text-[12px] font-semibold text-red-700 dark:text-red-400">
+          Stock ledger drift detected in the last 48 hours
+        </p>
+        <p className="text-[11px] text-red-600 dark:text-red-400/90 mt-1">
+          {recent.length} product{recent.length === 1 ? '' : 's'} have batch quantities the
+          movement ledger cannot explain. This is a software defect, not missing stock —
+          counts approved while it persists may post wrong adjustments. Check the Logs tab.
+        </p>
+      </div>
+    </div>
+  )
+}
+
+function StocktakeSessionCard({ session, onReview, onReject }) {
+  const st = session.stats || {}
+  const meta = STOCKTAKE_STATUS[session.status] || { label: cap(session.status), cls: badgeClass(session.status) }
+  const isSubmitted = session.status === 'submitted'
+  const revealed = session.status !== 'in_progress'
+  const pct = st.total_items ? Math.round((st.counted_items / st.total_items) * 100) : 0
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className={[
+            'w-10 h-10 rounded-lg flex items-center justify-center shrink-0',
+            isSubmitted
+              ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400'
+              : session.status === 'approved'
+                ? 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-600 dark:text-emerald-400'
+                : 'bg-blue-100 dark:bg-blue-900/40 text-blue-600 dark:text-blue-400',
+          ].join(' ')}>
+            <Icon name="clipboard" size={18} />
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">{session.label}</p>
+              <Badge className={meta.cls}>{meta.label}</Badge>
+            </div>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-0.5">
+              Started by {session.started_by} · {timeAgo(session.started_at)}
+              {session.submitted_at && ` · submitted ${timeAgo(session.submitted_at)}`}
+            </p>
+
+            <div className="flex items-center gap-2 mt-2 max-w-xs">
+              <div className="flex-1 h-1.5 rounded-full bg-gray-100 dark:bg-gray-700/40 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-[#1a6cbf]'}`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+              <span className="text-[11px] font-semibold tabular-nums text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                {st.counted_items ?? 0} / {st.total_items ?? 0}
+              </span>
+            </div>
+
+            {revealed && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2 text-[11px]">
+                <div><span className="text-gray-400">Differences:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{st.discrepancy_count ?? 0}</span></div>
+                <div><span className="text-gray-400">Missing:</span> <span className="font-medium text-red-600 dark:text-red-400">{Math.abs(st.total_missing ?? 0)}</span></div>
+                <div><span className="text-gray-400">Found:</span> <span className="font-medium text-amber-600 dark:text-amber-400">{st.total_found ?? 0}</span></div>
+                <div><span className="text-gray-400">Uncounted:</span> <span className="font-medium text-gray-700 dark:text-gray-300">{st.uncounted_items ?? 0}</span></div>
+              </div>
+            )}
+
+            {session.review_notes && (
+              <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5 italic">
+                &ldquo;{session.review_notes}&rdquo;
+                {session.reviewed_by && ` — ${session.reviewed_by}`}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {isSubmitted && (
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              onClick={onReject}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-100 flex items-center gap-1"
+            >
+              <Icon name="x" size={12} /> Return
+            </button>
+            <button
+              onClick={onReview}
+              className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1"
+            >
+              <Icon name="eye" size={12} /> Review
+            </button>
+          </div>
+        )}
+      </div>
+    </Card>
+  )
+}
+
+function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }) {
+  const [notes, setNotes] = useState('')
+  const [failures, setFailures] = useState(null)
+
+  const q = useQuery({
+    queryKey: ['admin', 'stocktake', session.id],
+    queryFn: () => api.get(`/api/pharmacy/stocktake/${session.id}`),
+  })
+
+  const detail = q.data?.session
+  const items = (detail?.items || []).filter((i) => i.variance !== 0)
+  const st = detail?.stats || {}
+  const missingValue = items.reduce(
+    (sum, i) => sum + (i.variance < 0 ? (i.retail_value || 0) : 0), 0
+  )
+  const unexplained = items.filter((i) => !i.reason).length
+
+  const handleApprove = async () => {
+    setFailures(null)
+    const result = await onApprove(notes.trim())
+    if (result) setFailures(result)
+  }
+
+  return (
+    <ModalShell
+      title="Review Stocktake"
+      subtitle={`${session.label} · counted by ${session.started_by}`}
+      onClose={loading ? undefined : onClose}
+      maxWidth="max-w-4xl"
+      footer={
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          >
+            Close
+          </button>
+          <button
+            onClick={onReject}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-100 disabled:opacity-50 flex items-center gap-2"
+          >
+            <Icon name="x" size={14} /> Return for Recount
+          </button>
+          <button
+            onClick={handleApprove}
+            disabled={loading || q.isLoading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-2 disabled:opacity-50"
+          >
+            {loading ? <Spinner size={14} /> : <Icon name="check" size={14} />}
+            {loading ? 'Posting…' : 'Approve & Adjust Stock'}
+          </button>
+        </div>
+      }
+    >
+      {q.isLoading ? (
+        <SkeletonTable rows={6} cols={6} />
+      ) : q.isError ? (
+        <ErrorState message={q.error?.message || 'Could not load the count'} onRetry={q.refetch} />
+      ) : (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 p-3 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[12px]">
+            <div><span className="text-gray-400">Counted:</span> <span className="font-medium">{st.counted_items} / {st.total_items}</span></div>
+            <div><span className="text-gray-400">Differences:</span> <span className="font-medium">{st.discrepancy_count}</span></div>
+            <div><span className="text-gray-400">Missing:</span> <span className="font-medium text-red-600 dark:text-red-400">{Math.abs(st.total_missing ?? 0)}</span></div>
+            <div><span className="text-gray-400">Found:</span> <span className="font-medium text-amber-600 dark:text-amber-400">{st.total_found ?? 0}</span></div>
+          </div>
+
+          {failures?.length > 0 && (
+            <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-3">
+              <p className="text-[12px] font-semibold text-red-700 dark:text-red-400">
+                Nothing was posted — {failures.length} line(s) could not be adjusted
+              </p>
+              <ul className="mt-1.5 space-y-0.5">
+                {failures.map((f) => (
+                  <li key={f.item_id} className="text-[11px] text-red-600 dark:text-red-400">
+                    <span className="font-medium">{f.product}</span> ({f.variance}) — {f.reason}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-[11px] text-red-600/80 dark:text-red-400/80 mt-1.5">
+                Stock moved since the count. Return it for a recount of these products.
+              </p>
+            </div>
+          )}
+
+          {st.uncounted_items > 0 && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
+              <Icon name="info" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                {st.uncounted_items} product{st.uncounted_items === 1 ? ' was' : 's were'} never
+                counted. Those are left untouched — not written off — and will be picked first
+                in the next count.
+              </p>
+            </div>
+          )}
+
+          {unexplained > 0 && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 flex items-start gap-2">
+              <Icon name="alert" size={14} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+              <p className="text-[11px] text-amber-700 dark:text-amber-400">
+                {unexplained} difference{unexplained === 1 ? ' has' : 's have'} no reason attached.
+                Return the count if you need the pharmacist to explain them first.
+              </p>
+            </div>
+          )}
+
+          {!items.length ? (
+            <EmptyState
+              icon="checkCircle"
+              title="No differences"
+              description="The shelf matched the system on every counted line. Approving records the count without moving any stock."
+            />
+          ) : (
+            <div className="overflow-x-auto max-h-[45vh] overflow-y-auto rounded-lg border border-gray-200 dark:border-gray-700/60">
+              <table className="w-full">
+                <thead className="sticky top-0 z-10">
+                  <tr className="border-b border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-[#1e293b]/80">
+                    <Th>Item</Th>
+                    <Th align="right">System</Th>
+                    <Th align="right">Counted</Th>
+                    <Th align="right">Difference</Th>
+                    <Th align="left" className="hidden sm:table-cell">Reason</Th>
+                    <Th align="right" className="hidden md:table-cell">Value</Th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50 dark:divide-gray-700/40">
+                  {items.map((i) => (
+                    <tr key={i.id} className={i.variance < 0 ? 'bg-red-50/30 dark:bg-red-950/10' : 'bg-amber-50/30 dark:bg-amber-950/10'}>
+                      <td className="px-4 py-2.5">
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{i.product_name}</p>
+                        <p className="text-[10px] text-gray-400">
+                          {[i.shelf_location, i.unit].filter(Boolean).join(' · ')}
+                        </p>
+                        {i.note && (
+                          <p className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5 italic">&ldquo;{i.note}&rdquo;</p>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-[12px] tabular-nums text-gray-600 dark:text-gray-300">
+                        {i.system_qty}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-[12px] tabular-nums text-gray-900 dark:text-gray-100 font-medium">
+                        {i.counted_qty}
+                      </td>
+                      <td className={[
+                        'px-4 py-2.5 text-right text-[13px] tabular-nums font-bold',
+                        i.variance < 0 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400',
+                      ].join(' ')}>
+                        {i.variance > 0 ? `+${i.variance}` : i.variance}
+                      </td>
+                      <td className="px-4 py-2.5 hidden sm:table-cell">
+                        {i.reason
+                          ? <Badge className="bg-gray-100 text-gray-600 dark:bg-gray-700/40 dark:text-gray-300">{cap(i.reason)}</Badge>
+                          : <span className="text-[11px] text-amber-600 dark:text-amber-400">not given</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-[12px] tabular-nums text-gray-600 dark:text-gray-300 hidden md:table-cell whitespace-nowrap">
+                        {formatMoney(i.retail_value || 0)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <Field label="Review notes" hint="Optional. Stored against the count.">
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              placeholder="e.g. Spot-checked the three largest differences"
+              className={`${inputCls} resize-none`}
+            />
+          </Field>
+
+          <div className="rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 p-3 flex items-start gap-2">
+            <Icon name="info" size={14} className="text-[#1a6cbf] dark:text-blue-400 mt-0.5 shrink-0" />
+            <p className="text-[11px] text-gray-600 dark:text-gray-300">
+              Approving posts {items.length} stock movement{items.length === 1 ? '' : 's'} and
+              writes off {formatMoney(missingValue)} at retail. Shortfalls come off the
+              oldest batch first; found units go back to the oldest batch. This cannot be
+              undone, only corrected with a further adjustment.
+            </p>
+          </div>
+        </div>
+      )}
+    </ModalShell>
+  )
+}
+
+function StocktakeRejectModal({ session, loading, onClose, onConfirm }) {
+  const [reason, setReason] = useState('')
+
+  return (
+    <ModalShell
+      title="Return for Recount"
+      subtitle={`${session.label} · no stock will be adjusted`}
+      onClose={loading ? undefined : onClose}
+      footer={
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm(session, reason)}
+            disabled={loading || !reason.trim()}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-red-600 hover:bg-red-700 text-white flex items-center gap-2 disabled:opacity-50"
+          >
+            {loading ? <Spinner size={14} /> : <Icon name="x" size={14} />} Return to Pharmacy
+          </button>
+        </div>
+      }
+    >
+      <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-3 text-[12px] text-red-700 dark:text-red-400 mb-3">
+        The count reopens for editing and the pharmacist sees your note. Counts already
+        entered are kept — they can correct the lines you query rather than start again.
+      </div>
+      <Field label="What needs correcting? *">
+        <textarea
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          rows={3}
+          placeholder="e.g. Recount Paracetamol 500mg — a difference of 40 units is unlikely, check the back shelf"
+          className={`${inputCls} resize-none`}
+        />
+      </Field>
+    </ModalShell>
+  )
+}
+
 // ─── Edit product item modal ────────────────────────────────────
 function EditProductItemModal({ item, loading, onClose, onSubmit }) {
   const [form, setForm] = useState({
@@ -1558,7 +2388,7 @@ function RestockVerificationSubTab() {
 
 function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
   const [notes, setNotes] = useState('')
-    const [qty, setQty] = useState(String(restock.quantity || 0))
+  const [qty, setQty] = useState(String(restock.quantity || 0))
   const [expiryDate, setExpiryDate] = useState(
     restock.expiry_date ? new Date(restock.expiry_date).toISOString().slice(0, 10) : ''
   )
@@ -1575,7 +2405,7 @@ function RestockVerifyModal({ restock, loading, onClose, onConfirm }) {
       }>
       <div className="space-y-3">
         <div className="rounded-lg bg-gray-50 dark:bg-gray-700/20 p-3 space-y-1.5 text-[12px]">
-                    <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock ?? '—'} {restock.unit || ''}</span></div>
+          <div className="flex justify-between"><span className="text-gray-400">Current stock:</span><span className="font-medium">{restock.current_stock ?? '—'} {restock.unit || ''}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Requested qty:</span><span className="font-medium">{restock.quantity}</span></div>
           <div className="flex justify-between"><span className="text-gray-400">Supplier:</span><span className="font-medium">{restock.supplier || '—'}</span></div>
         </div>

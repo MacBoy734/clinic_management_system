@@ -530,7 +530,7 @@ export default function QueueTab() {
                     {v.status === 'waiting' && v.visit_type === 'consultation' && (
                       <button onClick={() => setPaying(v)}
                         className="px-3 py-1.5 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 transition-colors">
-                        Collect Stage 1
+                        Collect Consultation Fee
                       </button>
                     )}
                     {v.status === 'waiting' && v.visit_type !== 'consultation' && (

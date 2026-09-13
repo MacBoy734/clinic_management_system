@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import toast from 'react-hot-toast'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import api from '@/lib/api'
 import {
-  SkeletonTable, SkeletonCard, ErrorState, EmptyState, Card, Badge, Icon,
-  cap, formatMoney, formatDate, StatCard,
+  SkeletonTable, SkeletonCard, SkeletonList, ErrorState, EmptyState, Card, Badge, Icon,
+  cap, formatMoney, formatDate, formatDateTime, timeAgo, StatCard, Spinner, badgeClass,
 } from '@/utils/helpers'
 import { RestockModal } from '@/components/pharmacy/RestockModal'
 
@@ -76,7 +76,72 @@ function daysUntil(dateStr) {
   return Math.ceil((d.getTime() - Date.now()) / (24 * 60 * 60 * 1000))
 }
 
+// ─── Shell ────────────────────────────────────────────────────────────────────
+
+const SUB_TABS = [
+  { key: 'inventory', label: 'Stock', icon: 'box' },
+  { key: 'count', label: 'Count Stock', icon: 'clipboard' },
+]
+
 export default function StockTab() {
+  const [view, setView] = useState('inventory')
+
+  const sessionsQuery = useQuery({
+    queryKey: ['pharmacy', 'stocktake'],
+    queryFn: () => api.get('/api/pharmacy/stocktake'),
+    staleTime: 60000,
+  })
+
+  const openSession = (sessionsQuery.data?.sessions || [])
+    .find((s) => s.status === 'in_progress' || s.status === 'submitted')
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] p-0.5">
+          {SUB_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setView(t.key)}
+              className={[
+                'px-3 py-1.5 rounded-md text-[12px] font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap',
+                view === t.key
+                  ? 'bg-[#1a6cbf] text-white'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200',
+              ].join(' ')}
+            >
+              <Icon name={t.icon} size={12} />
+              {t.label}
+              {t.key === 'count' && openSession && view !== 'count' && (
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              )}
+            </button>
+          ))}
+        </div>
+
+        {openSession && view === 'inventory' && (
+          <button
+            onClick={() => setView('count')}
+            className="text-[11px] text-amber-700 dark:text-amber-400 hover:underline flex items-center gap-1.5 min-w-0"
+          >
+            <Icon name="clock" size={12} className="shrink-0" />
+            <span className="truncate">
+              {openSession.status === 'in_progress'
+                ? `"${openSession.label}" is still being counted`
+                : `"${openSession.label}" is awaiting approval`}
+            </span>
+          </button>
+        )}
+      </div>
+
+      {view === 'inventory' ? <StockInventory /> : <CountStock />}
+    </div>
+  )
+}
+
+// ─── Stock ────────────────────────────────────────────────────────────────────
+
+function StockInventory() {
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
@@ -526,7 +591,7 @@ function StockRow({
             </span>
             <span className="text-[10px] text-gray-400">/ {item.reorder_level}</span>
           </div>
-                    <p className="text-[10px] text-gray-400 mt-0.5">{item.unit}</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">{item.unit}</p>
         </td>
 
         {/* Shelf */}
@@ -599,7 +664,7 @@ function StockRow({
               />
               <InfoTile label="Normal Price" value={formatMoney(item.normal_price)} />
               <InfoTile label="Promotional" value={formatMoney(item.promotional_price)} />
-                            <InfoTile label="Wholesale" value={formatMoney(item.wholesale_price)} />
+              <InfoTile label="Wholesale" value={formatMoney(item.wholesale_price)} />
               <ShelfLocationTile item={item} />
             </div>
 
@@ -760,6 +825,748 @@ function ShelfLocationTile({ item }) {
             </span>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// ─── Count Stock ──────────────────────────────────────────────────────────────
+
+const COUNT_STATUS = {
+  in_progress: { label: 'Counting', badge: badgeClass('in_progress') },
+  submitted: { label: 'Awaiting approval', badge: badgeClass('pending') },
+  approved: { label: 'Approved', badge: badgeClass('done') },
+}
+
+const COUNT_REASONS = [
+  { value: '', label: 'Select a reason…' },
+  { value: 'expired', label: 'Expired' },
+  { value: 'damaged', label: 'Damaged' },
+  { value: 'broken', label: 'Broken / spilt' },
+  { value: 'stolen', label: 'Suspected theft' },
+  { value: 'miscounted', label: 'Previous miscount' },
+  { value: 'misplaced', label: 'Misplaced — not on shelf' },
+  { value: 'found_unrecorded', label: 'Delivery never recorded' },
+  { value: 'other', label: 'Other' },
+]
+
+const COUNT_SIZES = [30, 60, 100]
+
+function CountStock() {
+  const [openId, setOpenId] = useState(null)
+
+  if (openId) return <CountSheet sessionId={openId} onBack={() => setOpenId(null)} />
+  return <CountSessions onOpen={setOpenId} />
+}
+
+function CountSessions({ onOpen }) {
+  const queryClient = useQueryClient()
+  const [starting, setStarting] = useState(false)
+
+  const sessionsQuery = useQuery({
+    queryKey: ['pharmacy', 'stocktake'],
+    queryFn: () => api.get('/api/pharmacy/stocktake'),
+    staleTime: 15000,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: (payload) => api.post('/api/pharmacy/stocktake', payload),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stocktake'] })
+      setStarting(false)
+      toast.success(`Counting ${data.session.stats.total_items} products`)
+      onOpen(data.session.id)
+    },
+    onError: (err) => toast.error(errMsg(err, 'Could not start the count')),
+  })
+
+  if (sessionsQuery.isLoading) {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {Array.from({ length: 4 }).map((_, i) => <SkeletonCard key={i} />)}
+        </div>
+        <SkeletonList items={3} />
+      </div>
+    )
+  }
+
+  if (sessionsQuery.error) {
+    return (
+      <ErrorState
+        message={errMsg(sessionsQuery.error, 'Could not load stocktakes')}
+        onRetry={sessionsQuery.refetch}
+      />
+    )
+  }
+
+  const sessions = sessionsQuery.data?.sessions || []
+  const open = sessions.find((s) => s.status === 'in_progress' || s.status === 'submitted')
+  const approved = sessions.filter((s) => s.status === 'approved')
+  const lastApproved = approved[0]
+
+  const totalMissing = approved.reduce((s, x) => s + Math.abs(x.stats.total_missing || 0), 0)
+  const totalFound = approved.reduce((s, x) => s + (x.stats.total_found || 0), 0)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <StatCard icon="clipboard" color="blue" label="Counts Done" value={approved.length} sublabel="approved" />
+        <StatCard icon="trendDown" color="red" label="Units Missing" value={totalMissing} sublabel="all counts" />
+        <StatCard icon="trendUp" color="amber" label="Units Found" value={totalFound} sublabel="all counts" />
+        <StatCard
+          icon="clock"
+          color="slate"
+          label="Last Count"
+          value={lastApproved ? timeAgo(lastApproved.reviewed_at) : '—'}
+          sublabel={lastApproved ? lastApproved.label : 'none yet'}
+        />
+      </div>
+
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <p className="text-[11px] text-gray-500 dark:text-gray-400 max-w-lg">
+          Count what is physically on the shelf. The system figure stays hidden until you
+          submit, so the number you type is the number you actually counted.
+        </p>
+        <button
+          onClick={() => setStarting(true)}
+          disabled={!!open || createMutation.isPending}
+          title={open ? 'Finish the open count first' : undefined}
+          className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+        >
+          <Icon name="plus" size={14} />
+          Start a count
+        </button>
+      </div>
+
+      {open && (
+        <button
+          onClick={() => onOpen(open.id)}
+          className="w-full text-left rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900 px-3 py-2.5 hover:border-blue-400 dark:hover:border-blue-700 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Icon name="clipboard" size={13} className="text-blue-600 dark:text-blue-400 shrink-0" />
+            <p className="text-[11px] text-blue-700 dark:text-blue-400 flex-1 min-w-0 truncate">
+              <span className="font-semibold">{open.label}</span>
+              {' — '}
+              {open.stats.counted_items} of {open.stats.total_items} counted
+            </p>
+            <Icon name="chevronRight" size={14} className="text-blue-400 shrink-0" />
+          </div>
+        </button>
+      )}
+
+      {!sessions.length ? (
+        <EmptyState
+          icon="clipboard"
+          title="No counts yet"
+          description="A count compares what is physically on the shelf against what the system believes. Any difference goes to an admin for approval."
+        />
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          {sessions.map((s) => (
+            <SessionCard key={s.id} session={s} onOpen={() => onOpen(s.id)} />
+          ))}
+        </div>
+      )}
+
+      {starting && (
+        <StartCountModal
+          loading={createMutation.isPending}
+          onClose={() => setStarting(false)}
+          onConfirm={(payload) => createMutation.mutate(payload)}
+        />
+      )}
+    </div>
+  )
+}
+
+function SessionCard({ session, onOpen }) {
+  const st = session.stats
+  const meta = COUNT_STATUS[session.status]
+  const revealed = session.status !== 'in_progress'
+  const pct = st.total_items ? Math.round((st.counted_items / st.total_items) * 100) : 0
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
+              {session.label}
+            </p>
+            <Badge className={meta.badge}>{meta.label}</Badge>
+          </div>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            {timeAgo(session.started_at)} · {session.started_by}
+          </p>
+        </div>
+        <button
+          onClick={onOpen}
+          className="px-3 py-1.5 rounded-lg text-[12px] font-medium whitespace-nowrap bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-blue-700 shrink-0"
+        >
+          {session.status === 'in_progress' ? 'Resume' : 'View'}
+        </button>
+      </div>
+
+      <div className="mt-3 flex items-center gap-2">
+        <div className="flex-1 h-1.5 rounded-full bg-gray-100 dark:bg-gray-700/40 overflow-hidden">
+          <div
+            className={`h-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-[#1a6cbf]'}`}
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+        <span className="text-[11px] font-semibold tabular-nums text-gray-600 dark:text-gray-300">
+          {st.counted_items}/{st.total_items}
+        </span>
+      </div>
+
+      {revealed && (
+        <div className="grid grid-cols-3 gap-2 mt-3">
+          <MiniStat label="Differences" value={st.discrepancy_count ?? 0} tone={st.discrepancy_count ? 'amber' : 'slate'} />
+          <MiniStat label="Missing" value={Math.abs(st.total_missing ?? 0)} tone={st.total_missing < 0 ? 'red' : 'slate'} />
+          <MiniStat label="Found" value={st.total_found ?? 0} tone={st.total_found > 0 ? 'amber' : 'slate'} />
+        </div>
+      )}
+
+      {session.review_notes && session.status === 'in_progress' && (
+        <div className="mt-3 rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 px-3 py-2">
+          <p className="text-[10px] font-semibold uppercase tracking-widest text-red-600 dark:text-red-400">
+            Returned by admin
+          </p>
+          <p className="text-[11px] text-red-700 dark:text-red-400 mt-1">{session.review_notes}</p>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function MiniStat({ label, value, tone }) {
+  const tones = {
+    amber: 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400',
+    red: 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-400',
+    slate: 'bg-gray-50 text-gray-600 dark:bg-gray-700/40 dark:text-gray-400',
+  }
+  return (
+    <div className={`rounded-lg px-2 py-1.5 text-center ${tones[tone] || tones.slate}`}>
+      <p className="text-[13px] font-bold tabular-nums">{value}</p>
+      <p className="text-[10px] uppercase tracking-widest opacity-70 truncate">{label}</p>
+    </div>
+  )
+}
+
+function StartCountModal({ onConfirm, onClose, loading }) {
+  const [label, setLabel] = useState('')
+  const [size, setSize] = useState(60)
+
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="relative w-full sm:max-w-md rounded-t-xl sm:rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700/60">
+          <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">Start a count</h3>
+          <button
+            onClick={onClose}
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
+          >
+            <Icon name="x" size={15} />
+          </button>
+        </div>
+
+        <div className="p-4 space-y-4">
+          <p className="text-[11px] text-gray-500 dark:text-gray-400">
+            Products that have gone longest without being counted are picked first.
+          </p>
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1.5">
+              Name
+            </label>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={`Count — ${formatDate(new Date().toISOString())}`}
+              className="w-full h-10 px-3 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-[10px] font-semibold uppercase tracking-widest text-gray-400 mb-1.5">
+              How many products
+            </label>
+            <div className="flex gap-2">
+              {COUNT_SIZES.map((n) => (
+                <button
+                  key={n}
+                  onClick={() => setSize(n)}
+                  className={[
+                    'flex-1 h-10 rounded-lg text-[13px] font-medium border transition-colors',
+                    size === n
+                      ? 'bg-[#1a6cbf] text-white border-[#1a6cbf]'
+                      : 'bg-white dark:bg-[#0f172a] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700/60 hover:border-blue-300',
+                  ].join(' ')}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <p className="text-[11px] text-gray-400 mt-2">
+              Keep it to what you can finish in one go. A count left open across trading
+              days is unreliable.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700/60">
+          <button
+            onClick={onClose}
+            className="px-3 py-2 rounded-lg text-[13px] font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/40"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onConfirm({ label: label.trim() || undefined, size })}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {loading ? <Spinner size={13} /> : <Icon name="clipboard" size={13} />}
+            Start
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CountSheet({ sessionId, onBack }) {
+  const queryClient = useQueryClient()
+  const [search, setSearch] = useState('')
+  const [hideDone, setHideDone] = useState(false)
+
+  const queryKey = ['pharmacy', 'stocktake', sessionId]
+
+  const sessionQuery = useQuery({
+    queryKey,
+    queryFn: () => api.get(`/api/pharmacy/stocktake/${sessionId}`),
+  })
+
+  const applyItem = (item) => {
+    queryClient.setQueryData(queryKey, (old) => {
+      if (!old) return old
+      return {
+        ...old,
+        session: {
+          ...old.session,
+          items: old.session.items.map((i) => (i.id === item.id ? item : i)),
+        },
+      }
+    })
+    queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stocktake'] })
+  }
+
+  const submitMutation = useMutation({
+    mutationFn: (payload) => api.post(`/api/pharmacy/stocktake/${sessionId}/submit`, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey })
+      queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stocktake'] })
+      toast.success('Submitted — add a reason for each difference')
+    },
+  })
+
+  if (sessionQuery.isLoading) {
+    return (
+      <div className="space-y-4">
+        <SkeletonCard />
+        <SkeletonList items={6} />
+      </div>
+    )
+  }
+
+  if (sessionQuery.error) {
+    return (
+      <ErrorState
+        message={errMsg(sessionQuery.error, 'Could not load the count')}
+        onRetry={sessionQuery.refetch}
+      />
+    )
+  }
+
+  const session = sessionQuery.data?.session
+  if (!session) return null
+
+  const counting = session.status === 'in_progress'
+  const annotating = session.status === 'submitted'
+  const st = session.stats
+  const meta = COUNT_STATUS[session.status]
+  const pct = st.total_items ? Math.round((st.counted_items / st.total_items) * 100) : 0
+
+  const handleSubmit = async () => {
+    try {
+      await submitMutation.mutateAsync({})
+    } catch (err) {
+      const body = err?.response?.data ?? err?.data
+      if (body?.requires_confirmation) {
+        const ok = window.confirm(
+          `${body.uncounted_count} product(s) were never counted.\n\n` +
+          'They will be left alone — not written off. Submit anyway?'
+        )
+        if (!ok) return
+        try {
+          await submitMutation.mutateAsync({ confirm_partial: true })
+        } catch (retry) {
+          toast.error(errMsg(retry, 'Could not submit'))
+        }
+        return
+      }
+      toast.error(errMsg(err, 'Could not submit'))
+    }
+  }
+
+  const visible = session.items
+    .filter((i) => {
+      const q = search.trim().toLowerCase()
+      if (!q) return true
+      return (i.product_name || '').toLowerCase().includes(q)
+        || (i.shelf_location || '').toLowerCase().includes(q)
+    })
+    .filter((i) => (counting && hideDone ? i.counted_at == null : true))
+    .filter((i) => (counting ? true : i.variance !== 0))
+
+  const groups = []
+  for (const item of visible) {
+    const shelf = item.shelf_location || 'No shelf recorded'
+    const last = groups[groups.length - 1]
+    if (last && last.shelf === shelf) last.items.push(item)
+    else groups.push({ shelf, items: [item] })
+  }
+
+  const nextIdByItem = new Map(
+    visible.map((item, i) => [item.id, visible[i + 1]?.id])
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <button
+            onClick={onBack}
+            className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/40 shrink-0"
+          >
+            <Icon name="arrowLeft" size={16} />
+          </button>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 truncate">
+                {session.label}
+              </h3>
+              <Badge className={meta.badge}>{meta.label}</Badge>
+            </div>
+            <p className="text-[11px] text-gray-400 mt-0.5">
+              {formatDateTime(session.started_at)} · {session.started_by}
+            </p>
+          </div>
+        </div>
+
+        {counting && (
+          <button
+            onClick={handleSubmit}
+            disabled={submitMutation.isPending || st.counted_items === 0}
+            className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            {submitMutation.isPending ? <Spinner size={13} /> : <Icon name="send" size={13} />}
+            Submit count
+          </button>
+        )}
+      </div>
+
+      {session.review_notes && counting && (
+        <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 px-3 py-2 flex items-start gap-2">
+          <Icon name="alert" size={13} className="text-red-600 dark:text-red-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-red-700 dark:text-red-400">
+            <span className="font-semibold">Returned by admin:</span> {session.review_notes}
+          </p>
+        </div>
+      )}
+
+      {counting && (
+        <>
+          <Card className="p-4">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                Progress
+              </p>
+              <p className="text-[13px] font-bold tabular-nums text-gray-900 dark:text-gray-100">
+                {st.counted_items}
+                <span className="text-gray-400 font-normal"> / {st.total_items}</span>
+              </p>
+            </div>
+            <div className="h-2 rounded-full bg-gray-100 dark:bg-gray-700/40 overflow-hidden">
+              <div
+                className={`h-full transition-all ${pct === 100 ? 'bg-emerald-500' : 'bg-[#1a6cbf]'}`}
+                style={{ width: `${pct}%` }}
+              />
+            </div>
+            <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
+              Type what is physically in the bin. Differences are revealed once you submit.
+            </p>
+          </Card>
+
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+            <div className="relative flex-1">
+              <Icon name="search" size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by product or shelf…"
+                className="w-full h-10 pl-10 pr-4 text-[13px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+              />
+            </div>
+            <button
+              onClick={() => setHideDone((v) => !v)}
+              className={[
+                'h-10 px-3 rounded-lg text-[12px] font-medium border flex items-center justify-center gap-1.5 transition-colors',
+                hideDone
+                  ? 'bg-[#1a6cbf] text-white border-[#1a6cbf]'
+                  : 'bg-white dark:bg-[#1e293b] text-gray-600 dark:text-gray-300 border-gray-200 dark:border-gray-700/60 hover:border-blue-300',
+              ].join(' ')}
+            >
+              <Icon name="eye" size={13} />
+              Hide counted
+            </button>
+          </div>
+        </>
+      )}
+
+      {annotating && (
+        <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 px-3 py-2 flex items-start gap-2">
+          <Icon name="alert" size={13} className="text-amber-600 dark:text-amber-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">
+              {st.discrepancy_count} difference{st.discrepancy_count === 1 ? '' : 's'} found.
+            </span>{' '}
+            Add a reason for each, then an admin will review. Counts are locked now.
+          </p>
+        </div>
+      )}
+
+      {session.status === 'approved' && (
+        <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-900 px-3 py-2 flex items-start gap-2">
+          <Icon name="checkCircle" size={13} className="text-emerald-600 dark:text-emerald-400 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-emerald-700 dark:text-emerald-400">
+            <span className="font-semibold">Approved by {session.reviewed_by}</span>
+            {' '}on {formatDateTime(session.reviewed_at)}.{' '}
+            {Math.abs(st.total_missing)} unit(s) written off, {st.total_found} added back
+            {st.uncounted_items > 0 && `, ${st.uncounted_items} left unadjusted`}.
+            {session.review_notes && ` ${session.review_notes}`}
+          </p>
+        </div>
+      )}
+
+      {!visible.length ? (
+        <EmptyState
+          icon={counting ? 'checkCircle' : 'check'}
+          title={counting ? 'Nothing left here' : 'No differences'}
+          description={
+            counting
+              ? 'Every product in view has been counted.'
+              : 'The shelf matched the system on every line.'
+          }
+        />
+      ) : (
+        <Card className="overflow-hidden divide-y divide-gray-50 dark:divide-gray-700/40">
+          {groups.map((g) => (
+            <div key={g.shelf}>
+              <div className="px-4 py-2 bg-gray-50 dark:bg-[#1e293b]/50 border-b border-gray-100 dark:border-gray-700/40">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-gray-400">
+                  {g.shelf}
+                </p>
+              </div>
+              <div className="divide-y divide-gray-50 dark:divide-gray-700/40">
+                {g.items.map((item) => (
+                  counting
+                    ? <CountRow
+                      key={item.id}
+                      item={item}
+                      sessionId={sessionId}
+                      onSaved={applyItem}
+                      nextId={nextIdByItem.get(item.id)}
+                    />
+                    : <ReviewRow key={item.id} item={item} sessionId={sessionId} onSaved={applyItem} editable={annotating} />
+                ))}
+              </div>
+            </div>
+          ))}
+        </Card>
+      )}
+    </div>
+  )
+}
+
+// One input, no system figure, no variance. Each row owns its own state so a
+// slow save can never discard what is being typed in another row.
+function CountRow({ item, sessionId, onSaved, nextId }) {
+  const [value, setValue] = useState(item.counted_qty ?? '')
+  const [saving, setSaving] = useState(false)
+  const committed = useRef(item.counted_qty ?? '')
+
+  useEffect(() => {
+    if (saving) return
+    committed.current = item.counted_qty ?? ''
+    setValue(item.counted_qty ?? '')
+  }, [item.counted_qty, saving])
+
+  const commit = async () => {
+    if (String(value) === String(committed.current)) return
+    setSaving(true)
+    try {
+      const res = await api.patch(
+        `/api/pharmacy/stocktake/${sessionId}/items/${item.id}`,
+        { counted_qty: value === '' ? null : Number(value) }
+      )
+      committed.current = res.item.counted_qty ?? ''
+      onSaved(res.item)
+    } catch (err) {
+      setValue(committed.current)
+      toast.error(errMsg(err, 'Could not save that count'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const done = item.counted_at != null
+
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
+          {item.product_name}
+        </p>
+        <p className="text-[11px] text-gray-400">
+          {[cap(item.category), `per ${item.unit || 'pc'}`].filter(Boolean).join(' · ')}
+        </p>
+      </div>
+
+            <input
+        type="number"
+        inputMode="numeric"
+        min="0"
+        data-count-input={item.id}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return
+          e.currentTarget.blur()
+          if (!nextId) return
+          const next = document.querySelector(`[data-count-input="${nextId}"]`)
+          if (next) { next.focus(); next.select() }
+        }}
+        placeholder="—"
+        className="w-20 sm:w-24 h-11 px-3 text-right text-[15px] font-medium tabular-nums rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-300 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf] shrink-0"
+      />
+
+      <span className="w-4 flex items-center justify-center shrink-0">
+        {saving && <Spinner size={13} className="text-gray-400" />}
+        {!saving && done && <Icon name="check" size={14} className="text-emerald-500" />}
+      </span>
+    </div>
+  )
+}
+
+function ReviewRow({ item, sessionId, onSaved, editable }) {
+  const [note, setNote] = useState(item.note ?? '')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { setNote(item.note ?? '') }, [item.note])
+
+  const save = async (patch) => {
+    setSaving(true)
+    try {
+      const res = await api.patch(`/api/pharmacy/stocktake/${sessionId}/items/${item.id}`, patch)
+      onSaved(res.item)
+    } catch (err) {
+      toast.error(errMsg(err, 'Could not save'))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const short = item.variance < 0
+  const varianceColor = short
+    ? 'text-red-600 dark:text-red-400'
+    : 'text-amber-600 dark:text-amber-400'
+
+  return (
+    <div className="px-4 py-3 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100 truncate">
+            {item.product_name}
+          </p>
+          <p className="text-[11px] text-gray-400 mt-0.5">
+            System {item.system_qty} · counted {item.counted_qty} · per {item.unit || 'pc'}
+          </p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className={`text-[15px] font-bold tabular-nums ${varianceColor}`}>
+            {item.variance > 0 ? `+${item.variance}` : item.variance}
+          </p>
+          {item.retail_value > 0 && (
+            <p className="text-[10px] text-gray-400 tabular-nums whitespace-nowrap">
+              {formatMoney(item.retail_value)} retail
+            </p>
+          )}
+        </div>
+      </div>
+
+      {!short && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1.5 flex items-start gap-1.5">
+          <Icon name="info" size={11} className="mt-0.5 shrink-0" />
+          More on the shelf than expected — usually a delivery that was never entered,
+          or a sale recorded twice.
+        </p>
+      )}
+
+      {editable ? (
+        <div className="mt-2.5 flex flex-col sm:flex-row gap-2">
+          <select
+            value={item.reason ?? ''}
+            onChange={(e) => save({ reason: e.target.value })}
+            disabled={saving}
+            className="sm:w-56 h-10 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf] disabled:opacity-50"
+          >
+            {COUNT_REASONS.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+          <input
+            type="text"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onBlur={() => { if (note !== (item.note ?? '')) save({ note }) }}
+            placeholder="Note for the admin (optional)"
+            className="flex-1 h-10 px-3 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40 focus:border-[#1a6cbf]"
+          />
+        </div>
+      ) : (
+        (item.reason || item.note) && (
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1.5">
+            {item.reason && <span className="font-medium">{cap(item.reason)}</span>}
+            {item.reason && item.note && ' — '}
+            {item.note}
+          </p>
+        )
       )}
     </div>
   )

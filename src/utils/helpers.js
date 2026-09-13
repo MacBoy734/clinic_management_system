@@ -596,3 +596,60 @@ export function PageTitle({ title, subtitle, action }) {
   )
 }
 
+export const DATE_RANGE_PRESETS = [
+  { key: 'all', label: 'All time' },
+  { key: 'today', label: 'Today' },
+  { key: 'yesterday', label: 'Yesterday' },
+  { key: 'this_week', label: 'This week' },
+  { key: 'this_month', label: 'This month' },
+  { key: 'last_7_days', label: 'Last 7 days' },
+  { key: 'last_30_days', label: 'Last 30 days' },
+  { key: 'last_month', label: 'Last month' },
+  { key: 'custom', label: 'Custom' },
+]
+
+export function formatLocalDate(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return ''
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+export function getDateRangePreset(preset, custom = { from: '', to: '' }) {
+  if (preset === 'all') return { from: '', to: '' }
+  if (preset === 'custom') return { from: custom.from || '', to: custom.to || '' }
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const to = formatLocalDate(today)
+
+  if (preset === 'today') return { from: to, to }
+  if (preset === 'yesterday') {
+    today.setDate(today.getDate() - 1)
+    const date = formatLocalDate(today)
+    return { from: date, to: date }
+  }
+  if (preset === 'this_week') {
+    const start = new Date(today)
+    start.setDate(today.getDate() - today.getDay())
+    return { from: formatLocalDate(start), to }
+  }
+  if (preset === 'this_month') {
+    const start = new Date(today.getFullYear(), today.getMonth(), 1)
+    return { from: formatLocalDate(start), to }
+  }
+  if (preset === 'last_7_days' || preset === 'last_30_days') {
+    const start = new Date(today)
+    start.setDate(today.getDate() - (preset === 'last_7_days' ? 6 : 29))
+    return { from: formatLocalDate(start), to }
+  }
+  if (preset === 'last_month') {
+    const start = new Date(today.getFullYear(), today.getMonth() - 1, 1)
+    const end = new Date(today.getFullYear(), today.getMonth(), 0)
+    return { from: formatLocalDate(start), to: formatLocalDate(end) }
+  }
+
+  return { from: '', to: '' }
+}
+

@@ -1,6 +1,5 @@
 'use client'
 
-
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery } from '@tanstack/react-query'
@@ -16,6 +15,7 @@ const FALLBACK = {
   services: 'Lab Services, General Outpatient Services, Specialised Clinic, Ultra Sound Services.',
   email: 'thekituiroyaldiagnosticcentre@gmail.com',
   tel: '0721532841 / 0114367561',
+  address: '',
   motto: 'We Listen, We Care; your Health is our Concern',
   logo: '/images/logo.png',
 }
@@ -62,6 +62,7 @@ export function ReportModal({ request, onClose }) {
 
   const reportId = `LAB-${String(request.id).padStart(5, '0')}`
   const patient = { gender: request.patient_gender, age: request.patient_age, age_unit: request.age_unit || 'years' }
+  const items = request.items || []
 
   if (!mounted) return null
 
@@ -116,16 +117,40 @@ export function ReportModal({ request, onClose }) {
             print-color-adjust: exact !important;
           }
 
-          /* Running header / footer: repeat on every printed page */
-          thead.report-running-header { display: table-header-group !important; }
-          tfoot.report-running-footer { display: table-footer-group !important; }
+          /* ── ONE SELF-CONTAINED SHEET PER TEST ───────────────────────
+             The letterhead + patient block and the signature + motto
+             block are real content inside every .report-page, not a
+             table running header/footer. table-header-group only
+             repeats at ROW boundaries, so a report held in a single
+             <td> never re-emits it — that was the old bug.
+             Flex column + min-height pins the footer to the bottom of
+             the sheet instead of letting it float mid-page. */
+          .report-page {
+            display: flex !important;
+            flex-direction: column !important;
+            min-height: 27.4cm;           /* A4 29.7 − 2×1cm margin − slack */
+            break-after: page;
+            page-break-after: always;
+            border: 0 !important;
+            padding-bottom: 0 !important;
+            margin-bottom: 0 !important;
+          }
+          .report-page:last-child {
+            break-after: auto;
+            page-break-after: auto;
+            min-height: 0;
+          }
+          .report-page-body { flex: 1 1 auto; }
+          .report-test-block { margin-bottom: 0 !important; }
 
-          /* Pagination discipline */
-          .report-test-block { break-inside: auto; }        /* start on the current page; split across pages when too tall */
-          .report-section    { break-inside: auto; }        /* a long panel section may also split */
-          .report-field-row  { break-inside: avoid; }       /* never split a single row */
-          .report-test-bar   { break-after: avoid; }        /* no orphaned test header  */
-          .report-section-bar{ break-after: avoid; }        /* no orphaned section header */
+          /* Decorative, and it costs ~130px on every repeated header */
+          .report-microscope { display: none !important; }
+
+          /* Pagination discipline for a test taller than one sheet */
+          .report-section    { break-inside: auto; }
+          .report-field-row  { break-inside: avoid; }
+          .report-test-bar   { break-after: avoid; }
+          .report-section-bar{ break-after: avoid; }
           .report-signatures { break-inside: avoid; }
 
           @page { size: A4; margin: 1cm; }
@@ -144,7 +169,7 @@ export function ReportModal({ request, onClose }) {
             <div className="min-w-0">
               <h3 className="text-[14px] font-semibold text-gray-900">Lab Report</h3>
               <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-                {request.patient_name} · {reportId} · {request.items?.length || 0} test{(request.items?.length || 0) !== 1 ? 's' : ''}
+                {request.patient_name} · {reportId} · {items.length} test{items.length !== 1 ? 's' : ''}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -164,144 +189,32 @@ export function ReportModal({ request, onClose }) {
             </div>
           </div>
 
-          {/* ── Printable report ── */}
+          {/* ── Printable report: one <section> per test ── */}
           <div className="report-scroll flex-1 overflow-y-auto bg-white text-gray-900">
-            <table className="w-full border-collapse">
-
-              {/* ═══ RUNNING HEADER (repeats every page) ═══ */}
-              <thead className="report-running-header">
-                <tr>
-                  <td className="p-0">
-                    {/* Top swoosh bar */}
-                    <div
-                      className="h-3 w-full"
-                      style={{ background: BLUE, borderRadius: '0 0 100% 100% / 0 0 14px 14px' }}
-                    />
-                    {/* Masthead */}
-                    <div className="text-center pt-3 px-8">
-                      <Image
-                        src={LETTERHEAD.logo}
-                        alt=""
-                        width={100}
-                        height={100}
-                        className="h-16 mx-auto mb-1"
-                        onError={(e) => { e.currentTarget.style.display = 'none' }}
-                      />
-                      <h1
-                        className="text-[26px] leading-tight font-extrabold"
-                        style={{ color: BLUE, fontFamily: 'Georgia, "Times New Roman", serif' }}
-                      >
-                        {LETTERHEAD.name}
-                      </h1>
-                      <p className="text-[12px] font-bold mt-0.5" style={{ color: GREEN }}>
-                        {LETTERHEAD.services}
-                      </p>
-                      <p className="text-[12px] mt-0.5 text-gray-900">
-                        <span className="font-semibold italic" style={{ color: BLUE }}>Email: </span>
-                        <span className="italic" style={{ color: BLUE }}>{LETTERHEAD.email}</span>
-                        <span className="font-bold ml-4">Tel: {LETTERHEAD.tel}</span>
-                      </p>
-                    </div>
-                    {/* Double rule */}
-                    <div className="mt-2 mx-6" style={{ borderTop: `3px solid ${BLUE}` }} />
-                    <div className="mt-0.75 mx-6 border-t border-gray-800" />
-                  </td>
-                </tr>
-              </thead>
-
-              {/* ═══ RUNNING FOOTER (repeats every page) ═══ */}
-              <tfoot className="report-running-footer">
-                <tr>
-                  <td className="p-0">
-                    <div className="flex items-stretch h-7 mt-3">
-                      <div className="w-1/5" style={{ background: GREEN }} />
-                      <div
-                        className="flex-1 flex items-center justify-center text-white italic font-semibold text-[12px]"
-                        style={{ background: BLUE }}
-                      >
-                        {LETTERHEAD.motto}
-                      </div>
-                      <div className="w-1/5" style={{ background: GREEN }} />
-                    </div>
-                  </td>
-                </tr>
-              </tfoot>
-
-              {/* ═══ FLOWING BODY ═══ */}
-              <tbody>
-                <tr>
-                  <td className="px-8 align-top">
-
-                    {/* Lab number (page 1) */}
-                    <div className="flex justify-end mt-4 text-[13px]">
-                      <span className="font-bold mr-2">Lab Number</span>
-                      <span className="inline-block min-w-40 border-b border-gray-500 font-mono text-center">
-                        {reportId}
-                      </span>
-                    </div>
-
-                    {/* Patient block (page 1) */}
-                    <div className="mt-3 w-full text-[13px] flex flex-row gap-10 items-center justify-between">
-                      <div className='flex-1 min-w-0'>
-                        <div className="grid grid-cols-[150px_1fr]">
-                          <div className="text-right pr-2 py-1 font-bold">Patient's Name:</div>
-                          <div className="border border-gray-400 px-2 py-1 uppercase">{request.patient_name || ''}</div>
-
-                          <div className="text-right pr-2 py-1 font-bold">Age:</div>
-                          <div className="border border-gray-400 border-t-0 px-2 py-1">
-                            {request.patient_age != null ? `${request.patient_age} ${request.age_unit}(s)` : 'Year(s)'}
-                          </div>
-
-                          <div className="text-right pr-2 py-1 font-bold">Gender:</div>
-                          <div className="border border-gray-400 border-t-0 px-2 py-1 flex items-center gap-6">
-                            <GenderOption label="Male" active={request.patient_gender === 'male'} />
-                            <GenderOption label="Female" active={request.patient_gender === 'female'} />
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-[150px_1fr] mt-3">
-                          <div className="text-right pr-2 py-1 font-bold">Requesting Dr:</div>
-                          <div className="border border-gray-400 px-2 py-1">{request.ordered_by || request.referred_by || ''}</div>
-                        </div>
-                      </div>
-                      <div>
-                        <Image src={'/images/microscope.png'} width={130} height={130} onError={(e) => { e.currentTarget.style.display = 'none' }} alt="" />
-                      </div>
-                    </div>
-
-                    {/* Section rule */}
-                    <div className="mt-4" style={{ borderTop: `2px solid ${BLUE}` }} />
-
-                    {/* Title */}
-                    <h2 className="text-center text-[17px] font-extrabold underline underline-offset-4 tracking-wide mt-5 mb-4">
-                      LAB REPORT
-                    </h2>
-
-                    {/* One block per test item */}
-                    {request.items?.map((item) => (
-                      <TestBlock key={item.id} item={item} patient={patient} />
-                    ))}
-
-                    {/* Signatures */}
-                    <div className="report-signatures grid grid-cols-2 gap-10 mt-10 text-[12px]">
-                      <div>
-                        <div className="border-b border-gray-800 h-8" />
-                        <p className="font-bold mt-1">Laboratory Officer</p>
-                        <p className="text-gray-700">{request.tech_name || ''}</p>
-                      </div>
-                      <div>
-                        <div className="border-b border-gray-800 h-8" />
-                        <p className="font-bold mt-1">Verified By</p>
-                      </div>
-                    </div>
-
-                    <p className="text-[10px] text-gray-500 text-center mt-6 mb-2">
-                      Computer-generated report · {reportId} · Printed {formatDate(new Date().toISOString())} {formatTime(new Date().toISOString())}
-                    </p>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
+            {items.length ? (
+              items.map((item) => (
+                <section
+                  key={item.id}
+                  className="report-page border-b border-gray-200 pb-6 mb-6 last:border-0 last:pb-0 last:mb-0"
+                >
+                  <ReportHead L={LETTERHEAD} request={request} reportId={reportId} />
+                  <div className="report-page-body px-8">
+                    <TestBlock item={item} patient={patient} />
+                  </div>
+                  <ReportFoot L={LETTERHEAD} request={request} reportId={reportId} />
+                </section>
+              ))
+            ) : (
+              <section className="report-page">
+                <ReportHead L={LETTERHEAD} request={request} reportId={reportId} />
+                <div className="report-page-body px-8">
+                  <p className="text-[12px] italic text-gray-500 py-8 text-center">
+                    No tests on this request.
+                  </p>
+                </div>
+                <ReportFoot L={LETTERHEAD} request={request} reportId={reportId} />
+              </section>
+            )}
           </div>
         </div>
       </div>
@@ -319,6 +232,139 @@ function GenderOption({ label, active }) {
       </span>
       <span className="border border-gray-400 px-2 py-0.5">{label}</span>
     </span>
+  )
+}
+
+// ─── Sheet header: swoosh, masthead, rules, lab number, patient identity ─────
+// Rendered once per test so it appears on every printed sheet.
+function ReportHead({ L, request, reportId }) {
+  return (
+    <div className="report-head">
+      {/* Top swoosh bar */}
+      <div
+        className="h-3 w-full"
+        style={{ background: BLUE, borderRadius: '0 0 100% 100% / 0 0 14px 14px' }}
+      />
+
+      {/* Masthead */}
+      <div className="text-center pt-3 px-8">
+        <Image
+          src={L.logo}
+          alt=""
+          width={100}
+          height={100}
+          className="h-16 mx-auto mb-1"
+          onError={(e) => { e.currentTarget.style.display = 'none' }}
+        />
+        <h1
+          className="text-[26px] leading-tight font-extrabold"
+          style={{ color: BLUE, fontFamily: 'Georgia, "Times New Roman", serif' }}
+        >
+          {L.name}
+        </h1>
+        <p className="text-[12px] font-bold mt-0.5" style={{ color: GREEN }}>
+          {L.services}
+        </p>
+        <p className="text-[12px] mt-0.5 text-gray-900">
+          <span className="font-semibold italic" style={{ color: BLUE }}>Email: </span>
+          <span className="italic" style={{ color: BLUE }}>{L.email}</span>
+          <span className="font-bold ml-4">Tel: {L.tel}</span>
+        </p>
+      </div>
+
+      {/* Double rule */}
+      <div className="mt-2 mx-6" style={{ borderTop: `3px solid ${BLUE}` }} />
+      <div className="mt-[3px] mx-6 border-t border-gray-800" />
+
+      <div className="px-8">
+        {/* Lab number */}
+        <div className="flex justify-end mt-4 text-[13px]">
+          <span className="font-bold mr-2">Lab Number</span>
+          <span className="inline-block min-w-40 border-b border-gray-500 font-mono text-center">
+            {reportId}
+          </span>
+        </div>
+
+        {/* Patient block */}
+        <div className="mt-3 w-full text-[13px] flex flex-row gap-10 items-center justify-between">
+          <div className="flex-1 min-w-0">
+            <div className="grid grid-cols-[150px_1fr]">
+              <div className="text-right pr-2 py-1 font-bold">Patient&apos;s Name:</div>
+              <div className="border border-gray-400 px-2 py-1 uppercase">{request.patient_name || ''}</div>
+
+              <div className="text-right pr-2 py-1 font-bold">Age:</div>
+              <div className="border border-gray-400 border-t-0 px-2 py-1">
+                {request.patient_age != null ? `${request.patient_age} ${request.age_unit}(s)` : 'Year(s)'}
+              </div>
+
+              <div className="text-right pr-2 py-1 font-bold">Gender:</div>
+              <div className="border border-gray-400 border-t-0 px-2 py-1 flex items-center gap-6">
+                <GenderOption label="Male" active={request.patient_gender === 'male'} />
+                <GenderOption label="Female" active={request.patient_gender === 'female'} />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-[150px_1fr] mt-3">
+              <div className="text-right pr-2 py-1 font-bold">Requesting Dr:</div>
+              <div className="border border-gray-400 px-2 py-1">{request.ordered_by || request.referred_by || ''}</div>
+            </div>
+          </div>
+
+          <div className="report-microscope">
+            <Image
+              src="/images/microscope.png"
+              width={130}
+              height={130}
+              alt=""
+              onError={(e) => { e.currentTarget.style.display = 'none' }}
+            />
+          </div>
+        </div>
+
+        {/* Section rule */}
+        <div className="mt-4" style={{ borderTop: `2px solid ${BLUE}` }} />
+
+        {/* Title */}
+        <h2 className="text-center text-[17px] font-extrabold underline underline-offset-4 tracking-wide mt-5 mb-4">
+          LAB REPORT
+        </h2>
+      </div>
+    </div>
+  )
+}
+
+// ─── Sheet footer: signatures, provenance line, motto bar ────────────────────
+// Rendered once per test so it appears on every printed sheet.
+function ReportFoot({ L, request, reportId }) {
+  return (
+    <div className="report-foot">
+      <div className="report-signatures px-8 grid grid-cols-2 gap-10 mt-6 text-[12px]">
+        <div>
+          <div className="border-b border-gray-800 h-8" />
+          <p className="font-bold mt-1">Laboratory Officer</p>
+          <p className="text-gray-700">{request.tech_name || ''}</p>
+        </div>
+        <div>
+          <div className="border-b border-gray-800 h-8" />
+          <p className="font-bold mt-1">Verified By</p>
+        </div>
+      </div>
+
+      <p className="text-[10px] text-gray-500 text-center mt-4 mb-2">
+        Computer-generated report · {reportId} · Printed {formatDate(new Date().toISOString())} {formatTime(new Date().toISOString())}
+      </p>
+
+      <div className="flex items-stretch h-7 mt-3">
+        <div className="w-1/5" style={{ background: GREEN }} />
+        <div
+          className="flex-1 flex items-center justify-center text-white italic font-semibold text-[12px]"
+          style={{ background: BLUE }}
+        >
+          {L.motto}
+        </div>
+        <div className="w-1/5" style={{ background: GREEN }} />
+      </div>
+    </div>
   )
 }
 
@@ -418,9 +464,7 @@ function ReportSection({ section, index, values, applied, patient }) {
     if (['textarea', 'sensitivity'].includes(f.input_type)) return { f }
     const raw = values[f.key]
     const has = raw != null && raw !== ''
-    // Prefer the range stored at save time. Falling back to live resolution
-    // would use the patient's age *today* and the catalogue as it stands now.
-     // Evaluate against the band stored at result-entry time. Re-resolving live
+    // Evaluate against the band stored at result-entry time. Re-resolving live
     // would use the patient's age today and the catalogue as it stands now —
     // the colour could then disagree with the range printed beside it.
     const snap = applied?.[f.key]

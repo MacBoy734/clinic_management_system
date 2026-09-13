@@ -102,6 +102,21 @@ function productSubtitle(p) {
 
 const SALES_PER_PAGE = 20
 
+// ── CART PERSISTENCE (localStorage) ─────────────────────────────────
+const CARTS_STORAGE_KEY = 'otc-carts-v1'
+
+function loadCarts() {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(CARTS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
+}
+
 export default function OTCSalesTab() {
   const queryClient = useQueryClient()
   const user = useAuthStore((s) => s.user)
@@ -109,6 +124,66 @@ export default function OTCSalesTab() {
   const [showNewSale, setShowNewSale] = useState(false)
   const [receiptSale, setReceiptSale] = useState(null)
   const [returnSale, setReturnSale] = useState(null)
+
+  // ── CART SYSTEM (parked sales) ───────────────────────────────────
+  const [carts, setCarts] = useState(() => loadCarts())
+  const [activeCartId, setActiveCartId] = useState(null)
+  const cartIdCounter = useRef(0)
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(CARTS_STORAGE_KEY, JSON.stringify(carts))
+    } catch {
+      // Storage full or unavailable — carts stay in-memory only.
+    }
+  }, [carts])
+
+  function createCart() {
+    cartIdCounter.current += 1
+    const id = `cart-${Date.now()}-${cartIdCounter.current}`
+    const now = new Date().toISOString()
+    const cart = {
+      id,
+      customerName: 'Walk-in Customer',
+      customerPhone: '',
+      selectedCustomer: null,
+      items: [],
+      discountAmount: '',
+      discountReason: '',
+      paymentLines: [{ uid: 1, method: 'cash', amount: '', reference: '', touched: false }],
+      createdAt: now,
+      updatedAt: now,
+      label: `Client ${carts.length + 1}`,
+    }
+    setCarts((prev) => [...prev, cart])
+    setActiveCartId(id)
+    return cart
+  }
+
+  function deleteCart(id) {
+    setCarts((prev) => prev.filter((c) => c.id !== id))
+    if (activeCartId === id) setActiveCartId(null)
+  }
+
+  function updateCart(id, updates) {
+    setCarts((prev) => prev.map((c) => (c.id === id ? { ...c, ...updates } : c)))
+  }
+
+  function handleCartChange(id, progress) {
+    setCarts((prev) => prev.map((c) => (c.id === id ? { ...c, ...progress } : c)))
+  }
+
+  function openCartModal(cartId) {
+    setActiveCartId(cartId)
+    setShowNewSale(true)
+  }
+
+  function handleNewSaleClick() {
+    createCart()
+    setShowNewSale(true)
+  }
+
+  const activeCart = carts.find((c) => c.id === activeCartId) || null
 
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -147,14 +222,14 @@ export default function OTCSalesTab() {
     },
   })
 
-    const returnMutation = useMutation({
+  const returnMutation = useMutation({
     mutationFn: ({ saleId, body }) => api.post(`/api/pharmacy/otc-sales/${saleId}/return`, body),
     onSuccess: (res) => {
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'otc-sales'] })
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'products'] })
       queryClient.invalidateQueries({ queryKey: ['pharmacy', 'stock'] })
       const parts = []
-            if (res.return.cash_refund_amount > 0) parts.push(`${formatMoney(res.return.cash_refund_amount)} cash`)
+      if (res.return.cash_refund_amount > 0) parts.push(`${formatMoney(res.return.cash_refund_amount)} cash`)
       if (res.return.credit_note_amount > 0) parts.push(`${formatMoney(res.return.credit_note_amount)} off their debt`)
       toast.success(`${res.return.return_number} — refund ${parts.join(' + ')}`)
       setReturnSale(null)
@@ -191,7 +266,11 @@ export default function OTCSalesTab() {
     try {
       const res = await createSaleMutation.mutateAsync(payload)
       toast.success(`Sale ${res.sale.receipt_number} completed`)
+      if (activeCartId) {
+        setCarts((prev) => prev.filter((c) => c.id !== activeCartId))
+      }
       setShowNewSale(false)
+      setActiveCartId(null)
       setReceiptSale(res.sale)
     } catch (err) {
       const shortfalls = err?.response?.data?.shortfalls || err?.data?.shortfalls
@@ -209,137 +288,193 @@ export default function OTCSalesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatCard icon="dollarSign" color="green" label="Today's Revenue"
-          value={formatMoney(stats.today_revenue)} sublabel="counter sales today" />
-        <StatCard icon="receipt" color="blue" label="Today's Sales"
-          value={stats.today_count} sublabel="transactions" />
-        <StatCard icon="trendUp" color="purple" label="Total Revenue"
-          value={formatMoney(stats.total_revenue)} sublabel="all-time" />
-        <StatCard icon="shoppingCart" color="amber" label="Total Sales"
-          value={stats.total_sales} sublabel="transactions" />
-      </div>
-
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Sales</h3>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400">
-            {salesQuery.data?.total ?? 0} sale{salesQuery.data?.total === 1 ? '' : 's'}
-            {debouncedSearch || from || to ? ' matching' : ''}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative">
-            <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Receipt, customer or item…"
-              className="h-9 pl-8 pr-3 w-52 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
-            />
-          </div>
-          <input
-            type="date"
-            value={from}
-            onChange={(e) => setFrom(e.target.value)}
-            className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
-          />
-          <span className="text-[12px] text-gray-400">→</span>
-          <input
-            type="date"
-            value={to}
-            onChange={(e) => setTo(e.target.value)}
-            className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
-          />
-          {(search || from || to) && (
-            <button
-              onClick={() => { setSearch(''); setFrom(''); setTo('') }}
-              className="h-9 px-2.5 rounded-lg text-[12px] font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
-            >
-              Clear
-            </button>
-          )}
-          <button
-            onClick={() => salesQuery.refetch()}
-            disabled={isRefetching}
-            className="px-3 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
-          >
-            <Icon
-              name="refresh"
-              size={13}
-              className={isRefetching ? 'animate-spin' : ''}
-            />
-            {isRefetching ? 'Refreshing…' : 'Refresh'}
-          </button>
-          <button
-            onClick={() => setShowNewSale(true)}
-            className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
-          >
-            <Icon name="plus" size={14} /> New Sale
-          </button>
-        </div>
-      </div>
-
-      {!sales.length ? (
-        <EmptyState
-          icon="receipt"
-          title={debouncedSearch || from || to ? 'No matching sales' : 'No counter sales yet'}
-          description={
-            debouncedSearch || from || to
-              ? 'Try a different receipt number, customer name or date range.'
-              : 'Start a sale to serve a walk-in customer. Receipts are generated automatically.'
-          }
-        />
-      ) : (
-        <>
-          <div className="space-y-3">
-                       {sales.map((sale) => {
-              const perm = returnPermission(sale, user)
-              return (
-                <SaleCard
-                  key={sale.id}
-                  sale={sale}
-                  onPrint={() => setReceiptSale(sale)}
-                  onReturn={() => setReturnSale(sale)}
-                  canReturn={perm.canReturn}
-                  returnBlockedReason={perm.reason}
-                />
-              )
-            })}
+      <div className="flex gap-4 items-start">
+        <div className="flex-1 min-w-0 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <StatCard icon="dollarSign" color="green" label="Today's Revenue"
+              value={formatMoney(stats.today_revenue)} sublabel="counter sales today" />
+            <StatCard icon="receipt" color="blue" label="Today's Sales"
+              value={stats.today_count} sublabel="transactions" />
+            <StatCard icon="trendUp" color="purple" label="Total Revenue"
+              value={formatMoney(stats.total_revenue)} sublabel="all-time" />
+            <StatCard icon="shoppingCart" color="amber" label="Total Sales"
+              value={stats.total_sales} sublabel="transactions" />
           </div>
 
-          {pages > 1 && (
-            <div className="flex items-center justify-between pt-1">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <h3 className="text-[14px] font-semibold text-gray-900 dark:text-gray-100">Sales</h3>
               <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                Page <span className="font-semibold">{page}</span> of <span className="font-semibold">{pages}</span>
+                {salesQuery.data?.total ?? 0} sale{salesQuery.data?.total === 1 ? '' : 's'}
+                {debouncedSearch || from || to ? ' matching' : ''}
               </p>
-              <div className="flex items-center gap-1.5">
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="relative">
+                <Icon name="search" size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Receipt, customer or item…"
+                  className="h-9 pl-8 pr-3 w-52 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-[#1a6cbf]/40"
+                />
+              </div>
+              <input
+                type="date"
+                value={from}
+                onChange={(e) => setFrom(e.target.value)}
+                className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
+              />
+              <span className="text-[12px] text-gray-400">→</span>
+              <input
+                type="date"
+                value={to}
+                onChange={(e) => setTo(e.target.value)}
+                className="h-9 px-2 text-[12px] rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100"
+              />
+              {(search || from || to) && (
                 <button
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                  className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                  onClick={() => { setSearch(''); setFrom(''); setTo('') }}
+                  className="h-9 px-2.5 rounded-lg text-[12px] font-medium text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700/40"
                 >
-                  ‹ Prev
+                  Clear
                 </button>
-                <button
-                  onClick={() => setPage((p) => Math.min(pages, p + 1))}
-                  disabled={page >= pages}
-                  className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  Next ›
-                </button>
+              )}
+              <button
+                onClick={() => salesQuery.refetch()}
+                disabled={isRefetching}
+                className="px-3 py-2 rounded-lg text-[13px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-blue-300 dark:hover:border-blue-700 flex items-center gap-1.5 disabled:opacity-60"
+              >
+                <Icon
+                  name="refresh"
+                  size={13}
+                  className={isRefetching ? 'animate-spin' : ''}
+                />
+                {isRefetching ? 'Refreshing…' : 'Refresh'}
+              </button>
+              <button
+                onClick={handleNewSaleClick}
+                className="px-3 py-2 rounded-lg text-[13px] font-medium bg-[#1a6cbf] hover:bg-[#155a9f] text-white flex items-center gap-1.5"
+              >
+                <Icon name="plus" size={14} /> New Sale
+              </button>
+            </div>
+          </div>
+
+          {!sales.length ? (
+            <EmptyState
+              icon="receipt"
+              title={debouncedSearch || from || to ? 'No matching sales' : 'No counter sales yet'}
+              description={
+                debouncedSearch || from || to
+                  ? 'Try a different receipt number, customer name or date range.'
+                  : 'Start a sale to serve a walk-in customer. Receipts are generated automatically.'
+              }
+            />
+          ) : (
+            <>
+              <div className="space-y-3">
+                {sales.map((sale) => {
+                  const perm = returnPermission(sale, user)
+                  return (
+                    <SaleCard
+                      key={sale.id}
+                      sale={sale}
+                      onPrint={() => setReceiptSale(sale)}
+                      onReturn={() => setReturnSale(sale)}
+                      canReturn={perm.canReturn}
+                      returnBlockedReason={perm.reason}
+                    />
+                  )
+                })}
+              </div>
+
+              {pages > 1 && (
+                <div className="flex items-center justify-between pt-1">
+                  <p className="text-[11px] text-gray-500 dark:text-gray-400">
+                    Page <span className="font-semibold">{page}</span> of <span className="font-semibold">{pages}</span>
+                  </p>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      ‹ Prev
+                    </button>
+                    <button
+                      onClick={() => setPage((p) => Math.min(pages, p + 1))}
+                      disabled={page >= pages}
+                      className="px-2.5 py-1 rounded-md text-[11px] font-medium border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/40 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      Next ›
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+        </div>
+
+        {/* ── Active Carts sidebar ── */}
+        <div className="w-72 shrink-0 border-l border-gray-200 dark:border-gray-700/60 pl-4">
+          <div className="sticky top-0">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 flex items-center gap-1.5">
+                  <Icon name="shoppingCart" size={14} className="text-[#1a6cbf]" />
+                  Active Carts
+                </h3>
+                <p className="text-[10px] text-gray-400 mt-0.5">
+                  {carts.length} client{carts.length !== 1 ? 's' : ''} in progress
+                </p>
               </div>
             </div>
-          )}
-        </>
-      )}
+
+            {!carts.length ? (
+              <div className="rounded-lg border border-dashed border-gray-200 dark:border-gray-700/60 px-3 py-6 text-center">
+                <Icon name="shoppingCart" size={24} className="text-gray-300 mx-auto mb-1.5" />
+                <p className="text-[11px] text-gray-400">No active carts</p>
+                <p className="text-[10px] text-gray-400 mt-0.5">Click "New Sale" to start serving a client</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {carts.map((cart) => (
+                  <CartCard
+                    key={cart.id}
+                    cart={cart}
+                    isActive={cart.id === activeCartId}
+                    onOpen={() => openCartModal(cart.id)}
+                    onDelete={() => deleteCart(cart.id)}
+                    onLabelChange={(label) => updateCart(cart.id, { label })}
+                  />
+                ))}
+              </div>
+            )}
+
+            {carts.length > 0 && (
+              <div className="mt-3 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-900/60 px-3 py-2">
+                <p className="text-[10px] text-blue-600 dark:text-blue-400 flex items-start gap-1.5">
+                  <Icon name="info" size={11} className="mt-0.5 shrink-0" />
+                  <span>Click a cart to resume the sale. Carts save items, customer and payments — even after a refresh.</span>
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
 
       {showNewSale && (
         <NewSaleModal
           loading={createSaleMutation.isPending}
           soldBy={soldBy}
-          onClose={() => setShowNewSale(false)}
+          cartId={activeCartId}
+          cartLabel={activeCart?.label}
+          cartData={activeCart}
+          onCartChange={handleCartChange}
+          onClose={() => { setShowNewSale(false); setActiveCartId(null) }}
           onComplete={handleCompleteSale}
         />
       )}
@@ -347,7 +482,7 @@ export default function OTCSalesTab() {
       {receiptSale && (
         <ReceiptModal sale={receiptSale} soldBy={soldBy} onClose={() => setReceiptSale(null)} />
       )}
-            {returnSale && (
+      {returnSale && (
         <ReturnModal
           sale={returnSale}
           loading={returnMutation.isPending}
@@ -355,6 +490,106 @@ export default function OTCSalesTab() {
           onSubmit={(body) => returnMutation.mutate({ saleId: returnSale.id, body })}
         />
       )}
+    </div>
+  )
+}
+// ─── Cart card ────────────────────────────────────────────────────────────────
+
+function CartCard({ cart, isActive, onOpen, onDelete, onLabelChange }) {
+  const [editingLabel, setEditingLabel] = useState(false)
+  const [labelValue, setLabelValue] = useState(cart.label)
+
+  const itemCount = cart.items?.length || 0
+  const total = (cart.items || []).reduce((s, i) => s + i.unit_price * i.quantity, 0)
+  const elapsed = Math.floor((Date.now() - new Date(cart.createdAt).getTime()) / 60000)
+  const justSaved = cart.updatedAt
+    && (Date.now() - new Date(cart.updatedAt).getTime()) < 10000
+
+  function saveLabel() {
+    onLabelChange(labelValue.trim() || cart.label)
+    setEditingLabel(false)
+  }
+
+  return (
+    <div
+      className={[
+        'rounded-lg border-2 p-3 cursor-pointer transition-all',
+        isActive
+          ? 'border-[#1a6cbf] bg-blue-50 dark:bg-blue-950/20 shadow-sm'
+          : 'border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] hover:border-[#1a6cbf]/40',
+      ].join(' ')}
+      onClick={onOpen}
+    >
+      <div className="flex items-center justify-between gap-2 mb-2">
+        {editingLabel ? (
+          <input
+            type="text"
+            value={labelValue}
+            onChange={(e) => setLabelValue(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onBlur={saveLabel}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveLabel() }}
+            autoFocus
+            className="flex-1 h-7 px-2 text-[12px] rounded border border-gray-200 dark:border-gray-600 bg-white dark:bg-[#0f172a] text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-1 focus:ring-[#1a6cbf]/40"
+          />
+        ) : (
+          <p className="text-[13px] font-semibold text-gray-900 dark:text-gray-100 truncate flex-1"
+            onClick={(e) => { e.stopPropagation(); setEditingLabel(true) }}
+            title="Click to rename"
+          >
+            {cart.label}
+          </p>
+        )}
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete() }}
+          className="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-950/30 shrink-0"
+          title="Delete cart"
+        >
+          <Icon name="x" size={13} />
+        </button>
+      </div>
+
+      <p className="text-[11px] text-gray-500 dark:text-gray-400 mb-1.5 truncate">
+        <Icon name="user" size={10} className="inline mr-1" />
+        {cart.customerName || 'Walk-in Customer'}
+      </p>
+
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[11px] text-gray-500 dark:text-gray-400">
+          {itemCount} item{itemCount !== 1 ? 's' : ''} · {formatMoney(total)}
+        </span>
+        {itemCount > 0 ? (
+          <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 text-[9px]">
+            Ready
+          </Badge>
+        ) : (
+          <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 text-[9px]">
+            Empty
+          </Badge>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between pt-2 border-t border-gray-100 dark:border-gray-700/40">
+        <span className="text-[10px] text-gray-400 flex items-center gap-1">
+          {justSaved ? (
+            <>
+              <Icon name="check" size={10} className="text-emerald-500" />
+              <span className="text-emerald-600 dark:text-emerald-400">Saved</span>
+            </>
+          ) : (
+            <>
+              <Icon name="clock" size={10} />
+              {elapsed}m ago
+            </>
+          )}
+        </span>
+        <button
+          onClick={(e) => { e.stopPropagation(); onOpen() }}
+          className="text-[11px] font-medium text-[#1a6cbf] dark:text-blue-400 hover:underline flex items-center gap-0.5"
+        >
+          {itemCount > 0 ? 'Complete' : 'Start'} <Icon name="chevronRight" size={11} />
+        </button>
+      </div>
     </div>
   )
 }
@@ -403,7 +638,7 @@ function SaleCard({ sale, onPrint, onReturn, canReturn, returnBlockedReason }) {
               </p>
             )}
           </div>
-                    <button
+          <button
             onClick={onPrint}
             className="px-3 py-1.5 rounded-lg text-[12px] font-medium bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 text-gray-600 dark:text-gray-300 hover:border-[#1a6cbf] hover:text-[#1a6cbf] dark:hover:border-blue-800 dark:hover:text-blue-400 flex items-center gap-1.5"
           >
@@ -459,13 +694,13 @@ function SaleCard({ sale, onPrint, onReturn, canReturn, returnBlockedReason }) {
 
 // ─── New sale modal ───────────────────────────────────────────────────────────
 
-function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
+function NewSaleModal({ loading, soldBy, onClose, onComplete, cartId, cartLabel, cartData, onCartChange }) {
   // ── ALL HOOKS AT THE TOP ─────────────────────────────────────────
-  const [customerName, setCustomerName] = useState('Walk-in Customer')
-  const [customerPhone, setCustomerPhone] = useState('')
+  const [customerName, setCustomerName] = useState(cartData?.customerName || 'Walk-in Customer')
+  const [customerPhone, setCustomerPhone] = useState(cartData?.customerPhone || '')
   const [customerSearchQuery, setCustomerSearchQuery] = useState('')
   const [showCustomerDropdown, setShowCustomerDropdown] = useState(false)
-  const [selectedCustomer, setSelectedCustomer] = useState(null)
+  const [selectedCustomer, setSelectedCustomer] = useState(cartData?.selectedCustomer || null)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
@@ -473,15 +708,21 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   const [selectedProduct, setSelectedProduct] = useState(null)
   const [selectedTier, setSelectedTier] = useState(null)
   const [quantity, setQuantity] = useState('1')
-  const [cart, setCart] = useState([])
+  const [cart, setCart] = useState(cartData?.items || [])
 
-  const [discountAmount, setDiscountAmount] = useState('')
-  const [discountReason, setDiscountReason] = useState('')
+  const [discountAmount, setDiscountAmount] = useState(cartData?.discountAmount || '')
+  const [discountReason, setDiscountReason] = useState(cartData?.discountReason || '')
 
-  const [paymentLines, setPaymentLines] = useState([
-    { uid: 1, method: 'cash', amount: '', reference: '', touched: false },
-  ])
-  const [nextUid, setNextUid] = useState(2)
+  const [paymentLines, setPaymentLines] = useState(
+    cartData?.paymentLines?.length
+      ? cartData.paymentLines.map((p) => ({ ...p }))
+      : [{ uid: 1, method: 'cash', amount: '', reference: '', touched: false }]
+  )
+  const [nextUid, setNextUid] = useState(
+    cartData?.paymentLines?.length
+      ? Math.max(...cartData.paymentLines.map((p) => p.uid)) + 1
+      : 2
+  )
 
   const searchRef = useRef(null)
   const customerSearchRef = useRef(null)
@@ -492,7 +733,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     staleTime: 30000,
   })
 
-  
+
   const customersQuery = useQuery({
     queryKey: ['pharmacy', 'customers', customerSearchQuery.trim()],
     queryFn: () => api.get('/api/pharmacy/customers', { params: { q: customerSearchQuery.trim() } }),
@@ -513,6 +754,43 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
     document.addEventListener('mousedown', onMouseDown)
     return () => document.removeEventListener('mousedown', onMouseDown)
   }, [])
+
+  // ── CART PROGRESS SYNC ─────────────────────────────────────────────
+  const onCartChangeRef = useRef(onCartChange)
+  useEffect(() => { onCartChangeRef.current = onCartChange })
+
+  useEffect(() => {
+    if (!cartId) return
+    const t = setTimeout(() => {
+      onCartChangeRef.current?.(cartId, {
+        customerName,
+        customerPhone,
+        selectedCustomer,
+        items: cart,
+        discountAmount,
+        discountReason,
+        paymentLines,
+        updatedAt: new Date().toISOString(),
+      })
+    }, 300)
+    return () => clearTimeout(t)
+  }, [customerName, customerPhone, selectedCustomer, cart, discountAmount, discountReason, paymentLines, cartId])
+
+  function handleClose() {
+    if (cartId && onCartChangeRef.current) {
+      onCartChangeRef.current(cartId, {
+        customerName,
+        customerPhone,
+        selectedCustomer,
+        items: cart,
+        discountAmount,
+        discountReason,
+        paymentLines,
+        updatedAt: new Date().toISOString(),
+      })
+    }
+    onClose()
+  }
 
 
   // ── DERIVED STATE ────────────────────────────────────────────────
@@ -565,7 +843,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
   }
   const totalPaid = paymentLines.reduce((s, p) => s + (parseInt(p.amount) || 0), 0)
   const remaining = cartTotal - totalPaid
-    const shortfall = Math.max(0, remaining)
+  const shortfall = Math.max(0, remaining)
   const overpaid = Math.max(0, totalPaid - cartTotal)
   const cashOnly = paymentLines.length === 1 && paymentLines[0].method === 'cash'
   const change = cashOnly ? overpaid : 0
@@ -613,7 +891,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
 
   function selectProduct(product) {
     setSelectedProduct(product)
-        setSelectedTier('normal')
+    setSelectedTier('normal')
     setQuantity('1')
     setShowDropdown(false)
     setSearchQuery(product.name)
@@ -621,13 +899,13 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
 
   function clearSelection() {
     setSelectedProduct(null)
-        setSelectedTier(null)
+    setSelectedTier(null)
     setQuantity('1')
     setSearchQuery('')
   }
 
   function handleAddToCart() {
-       const qtyNum = parseInt(quantity, 10) || 0
+    const qtyNum = parseInt(quantity, 10) || 0
     if (!selectedProduct || !selectedTier || qtyNum < 1) {
       toast.error('Pick an item, a price tier and a quantity first')
       return
@@ -642,7 +920,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
       )
       return
     }
-        const qty = qtyNum
+    const qty = qtyNum
 
     setCart((prev) => {
       // Same product at the same tier is the same line — adding again bumps the
@@ -791,7 +1069,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
 
   // ── RENDER ───────────────────────────────────────────────────────
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={handleClose}>
       <div className="absolute inset-0 bg-black/50" />
       <div
         className="relative w-full max-w-2xl rounded-xl bg-white dark:bg-[#1e293b] border border-gray-200 dark:border-gray-700/60 shadow-2xl max-h-[92vh] flex flex-col"
@@ -804,14 +1082,16 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
               <Icon name="shoppingCart" size={16} className="text-white" />
             </div>
             <div>
-              <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">New Counter Sale</h3>
+              <h3 className="text-[13px] font-semibold text-gray-900 dark:text-gray-100">
+                {cartLabel ? `${cartLabel} — New Sale` : 'New Counter Sale'}
+              </h3>
               <p className="text-[11px] text-gray-500 dark:text-gray-400">
                 Walk-in customer · served by {soldBy}
               </p>
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={handleClose}
             className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
             aria-label="Close"
           >
@@ -851,7 +1131,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                 )}
               </div>
 
-                            {showCustomerDropdown && (
+              {showCustomerDropdown && (
                 <div className="absolute z-30 mt-1 w-full bg-white dark:bg-[#1e293b] rounded-lg border border-gray-200 dark:border-gray-700/60 shadow-xl max-h-60 overflow-y-auto">
                   {!customerSearchQuery.trim() && customers.length > 0 && (
                     <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-widest text-gray-400 border-b border-gray-100 dark:border-gray-700/40">
@@ -877,7 +1157,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
                       </button>
                     </div>
                   )}
-                                    {!customersQuery.isLoading && !customersQuery.error && customers.length === 0 && (
+                  {!customersQuery.isLoading && !customersQuery.error && customers.length === 0 && (
                     <div className="px-3 py-3 text-center text-[12px] text-gray-500 dark:text-gray-400">
                       {customerSearchQuery.trim()
                         ? 'No match. Keep typing to create a new customer.'
@@ -1445,7 +1725,7 @@ function NewSaleModal({ loading, soldBy, onClose, onComplete }) {
           <div className="px-5 py-4 border-t border-gray-200 dark:border-gray-700/60 flex items-center justify-end gap-2 bg-gray-50/50 dark:bg-[#1e293b]/50">
             <button
               type="button"
-              onClick={onClose}
+              onClick={handleClose}
               className="px-4 py-2 rounded-lg text-[13px] font-medium bg-white border border-gray-200 dark:bg-[#1e293b] dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700/20"
             >
               Cancel

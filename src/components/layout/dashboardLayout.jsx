@@ -116,6 +116,15 @@ function MoonIcon({ className = 'w-5 h-5' }) {
   )
 }
 
+function RefreshIcon({ className = 'w-5 h-5' }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
+  )
+}
+
 function ChevronDown({ open }) {
   return (
     <svg
@@ -362,6 +371,9 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
     setProfileOpen((p) => !p)
     setNotifOpen(false)
   }
+    const handleRefresh = () => {
+    if (typeof window !== 'undefined') window.location.reload()
+  }
 
   if (!user) return null
 
@@ -482,7 +494,14 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 inline-block" />
             <span className="hidden sm:inline">Online</span>
           </div>
-
+          {/* Refresh page */}
+          <button
+            onClick={handleRefresh}
+            title="Reload page"
+            className="p-1.5 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
+          >
+            <RefreshIcon />
+          </button>
           {/* Theme toggle */}
           <button
             onClick={toggleDark}
