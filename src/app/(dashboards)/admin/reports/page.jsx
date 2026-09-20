@@ -15,6 +15,8 @@ import {
   formatMoney, cap,
 } from '@/utils/helpers'
 
+// TODO: every referral listed to show how much the client paid and lab tests they took
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const TABS = [

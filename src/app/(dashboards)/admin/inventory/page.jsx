@@ -1464,13 +1464,15 @@ function StocktakeReviewSubTab() {
                 id: reviewing.id,
                 body: { review_notes: notes || undefined },
               })
+              if (res.partial) {
+                toast.error(`${res.posted_count} posted — ${res.failures.length} line(s) returned for recount`)
+                return res
+              }
               toast.success(`Approved — ${res.posted_count} adjustment(s) posted`)
               setReviewing(null)
               return null
             } catch (err) {
-              const body = err?.response?.data ?? err?.data
-              if (body?.failures?.length) return body.failures
-              toast.error(body?.error || err.message || 'Could not approve')
+              toast.error(err.message || 'Could not approve')
               return null
             }
           }}
@@ -1610,7 +1612,7 @@ function StocktakeSessionCard({ session, onReview, onReject }) {
 
 function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }) {
   const [notes, setNotes] = useState('')
-  const [failures, setFailures] = useState(null)
+  const [outcome, setOutcome] = useState(null)
 
   const q = useQuery({
     queryKey: ['admin', 'stocktake', session.id],
@@ -1618,7 +1620,7 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
   })
 
   const detail = q.data?.session
-  const items = (detail?.items || []).filter((i) => i.variance !== 0)
+  const items = (detail?.items || []).filter((i) => i.variance != null && i.variance !== 0)
   const st = detail?.stats || {}
   const missingValue = items.reduce(
     (sum, i) => sum + (i.variance < 0 ? (i.retail_value || 0) : 0), 0
@@ -1626,9 +1628,9 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
   const unexplained = items.filter((i) => !i.reason).length
 
   const handleApprove = async () => {
-    setFailures(null)
+    setOutcome(null)
     const result = await onApprove(notes.trim())
-    if (result) setFailures(result)
+    if (result) setOutcome(result)
   }
 
   return (
@@ -1677,20 +1679,21 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
             <div><span className="text-gray-400">Found:</span> <span className="font-medium text-amber-600 dark:text-amber-400">{st.total_found ?? 0}</span></div>
           </div>
 
-          {failures?.length > 0 && (
-            <div className="rounded-lg bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-900 p-3">
-              <p className="text-[12px] font-semibold text-red-700 dark:text-red-400">
-                Nothing was posted — {failures.length} line(s) could not be adjusted
+          {outcome && (
+            <div className="rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 p-3">
+              <p className="text-[12px] font-semibold text-amber-700 dark:text-amber-400">
+                {outcome.posted_count} adjustment(s) posted — {outcome.failures.length} line(s) returned for recount
               </p>
               <ul className="mt-1.5 space-y-0.5">
-                {failures.map((f) => (
-                  <li key={f.item_id} className="text-[11px] text-red-600 dark:text-red-400">
+                {outcome.failures.map((f) => (
+                  <li key={f.item_id} className="text-[11px] text-amber-600 dark:text-amber-400">
                     <span className="font-medium">{f.product}</span> ({f.variance}) — {f.reason}
                   </li>
                 ))}
               </ul>
-              <p className="text-[11px] text-red-600/80 dark:text-red-400/80 mt-1.5">
-                Stock moved since the count. Return it for a recount of these products.
+              <p className="text-[11px] text-amber-600/80 dark:text-amber-400/80 mt-1.5">
+                The posted lines are marked below and will not be posted again. The pharmacist
+                recounts only the lines above.
               </p>
             </div>
           )}
@@ -1731,6 +1734,7 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
                     <Th align="right">System</Th>
                     <Th align="right">Counted</Th>
                     <Th align="right">Difference</Th>
+                    <Th align="right" className="hidden lg:table-cell">Since count</Th>
                     <Th align="left" className="hidden sm:table-cell">Reason</Th>
                     <Th align="right" className="hidden md:table-cell">Value</Th>
                   </tr>
@@ -1739,7 +1743,14 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
                   {items.map((i) => (
                     <tr key={i.id} className={i.variance < 0 ? 'bg-red-50/30 dark:bg-red-950/10' : 'bg-amber-50/30 dark:bg-amber-950/10'}>
                       <td className="px-4 py-2.5">
-                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">{i.product_name}</p>
+                        <p className="text-[13px] font-medium text-gray-900 dark:text-gray-100">
+                          {i.product_name}
+                          {i.posted_at && (
+                            <Badge className="ml-1.5 bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                              adjusted
+                            </Badge>
+                          )}
+                        </p>
                         <p className="text-[10px] text-gray-400">
                           {[i.shelf_location, i.unit].filter(Boolean).join(' · ')}
                         </p>
@@ -1758,6 +1769,20 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
                         i.variance < 0 ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400',
                       ].join(' ')}>
                         {i.variance > 0 ? `+${i.variance}` : i.variance}
+                      </td>
+                      <td className="px-4 py-2.5 text-right hidden lg:table-cell">
+                        {i.movements_since_count > 0 ? (
+                          <>
+                            <p className="text-[12px] tabular-nums text-gray-700 dark:text-gray-300">
+                              {i.moved_since_count > 0 ? `+${i.moved_since_count}` : i.moved_since_count}
+                            </p>
+                            <p className="text-[10px] text-gray-400 whitespace-nowrap">
+                              {i.movements_since_count} move{i.movements_since_count === 1 ? '' : 's'} · {timeAgo(i.last_moved_at)}
+                            </p>
+                          </>
+                        ) : (
+                          <span className="text-[11px] text-gray-400">none</span>
+                        )}
                       </td>
                       <td className="px-4 py-2.5 hidden sm:table-cell">
                         {i.reason
@@ -1790,7 +1815,9 @@ function StocktakeReviewModal({ session, loading, onClose, onApprove, onReject }
               Approving posts {items.length} stock movement{items.length === 1 ? '' : 's'} and
               writes off {formatMoney(missingValue)} at retail. Shortfalls come off the
               oldest batch first; found units go back to the oldest batch. This cannot be
-              undone, only corrected with a further adjustment.
+              undone, only corrected with a further adjustment. Movement since the count
+              does not change what gets posted — the shelf and the system moved together,
+              so the difference is the same figure it was.
             </p>
           </div>
         </div>

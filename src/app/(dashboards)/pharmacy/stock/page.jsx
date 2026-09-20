@@ -1240,7 +1240,7 @@ function CountSheet({ sessionId, onBack }) {
         || (i.shelf_location || '').toLowerCase().includes(q)
     })
     .filter((i) => (counting && hideDone ? i.counted_at == null : true))
-    .filter((i) => (counting ? true : i.variance !== 0))
+        .filter((i) => (counting ? true : i.variance != null && i.variance !== 0))
 
   const groups = []
   for (const item of visible) {
