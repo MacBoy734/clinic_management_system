@@ -20,7 +20,6 @@ export function RestockModal({
   item,
   pending = null,
   loading,
-  batchRequired = false,
   expiryRequired = false,
   onClose,
   onConfirm,
@@ -55,15 +54,11 @@ export function RestockModal({
   // Not a blocker — short-dated stock is sometimes accepted knowingly.
   const expirySoon = expiryValid && !expiryPast &&
     (expiryTime - Date.now()) / 86400000 <= 90
-
-  // An entered value must still be sane, but a blank one is fine unless the
-  // caller explicitly demands it.
-  const batchOk = batchRequired ? batchEntered : true
   const expiryOk = expiryRequired
     ? (expiryEntered && expiryValid && !expiryPast)
     : (!expiryEntered || (expiryValid && !expiryPast))
 
-  const valid = !pending && qty > 0 && batchOk && expiryOk
+  const valid = !pending && qty > 0 && expiryOk
 
   const handleSubmit = (e) => {
     e.preventDefault()

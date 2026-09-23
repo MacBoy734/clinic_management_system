@@ -775,9 +775,9 @@ function ProductStockSubTab() {
                             label="Delete"
                             color="red"
                             onClick={async () => {
-                              if (!confirm(`Delete "${item.name}"? This cannot be undone.`)) return
-                              try { await delMut.mutateAsync(item.id); toast.success('Item deleted') }
-                              catch (err) { toast.error(err.message || 'Could not delete item') }
+                              if (!confirm(`Deactivate "${item.name}"? It will no longer appear in sales, orders or prescriptions.`)) return
+                              try { await delMut.mutateAsync(item.id); toast.success('Item deactivated') }
+                              catch (err) { toast.error(err.message || 'Could not deactivate item') }
                             }}
                           />
                         </div>

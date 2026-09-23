@@ -851,7 +851,7 @@ export default function ConsultationTab() {
                   onChange={(e) => setVitals({ ...vitals, vitals_notes: e.target.value })}
                   rows={2}
                   placeholder="e.g. Patient appears in mild distress"
-                  className={`${inputCls} resize-none`}
+                  className={`${inputCls}`}
                 />
               </div>
             </div>
@@ -1065,7 +1065,7 @@ function SoapSection({ letter, label, hint, open, onToggle, value, onChange, pla
             onChange={(e) => onChange(e.target.value)}
             rows={3}
             placeholder={placeholder}
-            className={`${inputCls} resize-none`}
+            className={`${inputCls}`}
           />
         </div>
       )}

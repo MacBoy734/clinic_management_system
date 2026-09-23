@@ -10,9 +10,6 @@ import {
 } from '@/utils/helpers'
 import { RestockModal } from '@/components/pharmacy/RestockModal'
 
-// ─── Category presentation ────────────────────────────────────────────────────
-// Order matters: this is the chip order. Adding a category to the
-// ProductCategory enum and to this map is all the UI needs.
 
 const CATEGORY_META = {
   medication: {
@@ -455,10 +452,6 @@ function StockInventory() {
           item={restocking}
           pending={pendingByProduct.get(restocking.id) || null}
           loading={restockMutation.isPending}
-          // Batch and expiry are collected by the admin at receipt, not here.
-          // If your RestockModal still marks them required, this prop is
-          // where to relax it.
-          batchRequired={false}
           expiryRequired={false}
           onClose={() => setRestocking(null)}
           onConfirm={handleRestock}

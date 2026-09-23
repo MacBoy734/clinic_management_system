@@ -339,8 +339,8 @@ export default function StaffPage() {
     return matchSearch && matchRole
   })
 
-  const activeCount = staff.filter((s) => s.is_active === 'active').length
-  const inactiveCount = staff.filter((s) => s.is_active === 'inactive').length
+  const activeCount = staff.filter((s) => s.is_active).length
+   const inactiveCount = staff.filter((s) => !s.is_active).length
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleCreate = (form) => {
@@ -547,7 +547,7 @@ export default function StaffPage() {
                             ? 'text-emerald-600 dark:text-emerald-400'
                             : 'text-gray-400 dark:text-gray-600'}`}>
                           <span className={`w-1.5 h-1.5 rounded-full
-                            ${s.is_active === 'active'
+                            ${s.is_active
                               ? 'bg-emerald-500'
                               : 'bg-gray-400 dark:bg-gray-600'}`} />
                           {s.is_active ? 'Active' : 'Inactive'}

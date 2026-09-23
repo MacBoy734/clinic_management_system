@@ -161,7 +161,7 @@ export default function AdminLogsPage() {
   const [alertsOnly, setAlertsOnly] = useState(false)
   const [page, setPage] = useState(1)
 
-  const { data: logsData, isLoading, isError, isFetching, error } = useQuery({
+  const { data: logsData, isLoading, isError, isFetching, error, refetch } = useQuery({
     queryKey: ['admin', 'logs', { page, category, search }],
     queryFn: () => api.get(
       `/api/admin/logs?page=${page}&limit=${LIMIT}&category=${category}&search=${encodeURIComponent(search)}`

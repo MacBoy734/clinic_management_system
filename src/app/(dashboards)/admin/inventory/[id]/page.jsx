@@ -127,14 +127,14 @@ export default function AdminProductPage({ params }) {
   const totalPages = Math.ceil(totalMovements / limit)
 
   const delMut = useMutation({
-    mutationFn: () => api.delete(`/api/admin/products/${productId}`),
+    mutationFn: () => api.delete(`/api/admin/drug-stock/${productId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin'] })
-      toast.success('Product deleted')
+      toast.success('Product deactivated')
       router.push('/admin/inventory')
     },
     onError: (err) => {
-      toast.error(err.message || 'Could not delete')
+      toast.error(err.message || 'Could not deactivate product')
       setConfirmDelete(false)
     },
   })
@@ -438,8 +438,8 @@ export default function AdminProductPage({ params }) {
               <ActionButton icon="arrowLeft" label="Back to Inventory" subtitle="Return to inventory list" onClick={() => router.push('/admin/inventory')} />
               <ActionButton
                 icon="trash"
-                label={confirmDelete ? 'Click again to confirm' : 'Delete Product'}
-                subtitle="Permanently remove this SKU"
+                label={confirmDelete ? 'Click again to confirm' : 'Deactivate Product'}
+                subtitle="Hide from sales, orders and prescriptions"
                 onClick={() => {
                   if (!confirmDelete) {
                     setConfirmDelete(true)
