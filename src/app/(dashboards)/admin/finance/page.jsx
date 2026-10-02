@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/authStore'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, Icon,
   SkeletonCard, SkeletonTable, Spinner,
-  formatMoney, formatDate, formatDateTime, cap, badgeClass,
+    formatMoney, StatCard, RevenueHiddenContext, REVENUE_MASK, formatDate, formatDateTime, cap, badgeClass,
 } from '@/utils/helpers'
 import ReturnModal from '@/components/pharmacy/ReturnModal'
 
@@ -88,34 +88,6 @@ const EXPENSE_BUCKETS = [
   },
 ]
 
-// ─── Shared UI helpers (continued) ───────────────────────────────────────────
-
-function StatTile({ label, value, icon, color = 'blue', sublabel }) {
-  const colors = {
-    blue: { card: 'bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-900/50', val: 'text-blue-700 dark:text-blue-400', ic: 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400' },
-    green: { card: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/50', val: 'text-emerald-700 dark:text-emerald-400', ic: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400' },
-    emerald: { card: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/50', val: 'text-emerald-700 dark:text-emerald-400', ic: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400' },
-    amber: { card: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50', val: 'text-amber-700 dark:text-amber-400', ic: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400' },
-    red: { card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50', val: 'text-red-700 dark:text-red-400', ic: 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' },
-    purple: { card: 'bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-900/50', val: 'text-purple-700 dark:text-purple-400', ic: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400' },
-    slate: { card: 'bg-white border-gray-200 dark:bg-[#1e293b] dark:border-gray-700/60', val: 'text-gray-700 dark:text-gray-300', ic: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400' },
-  }
-  const c = colors[color] || colors.blue
-  return (
-    <div className={`rounded-xl border p-4 ${c.card}`}>
-      <div className="flex items-start justify-between mb-2">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">{label}</p>
-        {icon && (
-          <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${c.ic}`}>
-            <Icon name={icon} size={18} />
-          </div>
-        )}
-      </div>
-      <p className={`text-2xl font-bold tabular-nums ${c.val} truncate`}>{value}</p>
-      {sublabel && <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">{sublabel}</p>}
-    </div>
-  )
-}
 
 function ActionButton({ icon, label, title, onClick, variant = 'default' }) {
   const variants = {
@@ -378,14 +350,15 @@ function OverviewTab() {
           <ErrorState message={error?.message || 'Could not load overview'} onRetry={() => { clinicQ.refetch(); pharmacyQ.refetch() }} />
         ) : (<div className="p-4 sm:p-5">
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatTile label="Cash Collected" value={formatMoney(totalRevenue)} icon="dollarSign" color="emerald" sublabel="Clinic + pharmacy" />
-            <StatTile label="Clinic" value={formatMoney(clinicRev)} icon="building" color="blue" sublabel="Consultations, lab, procedures" />
-            <StatTile label="Pharmacy" value={formatMoney(pharmacyRev)} icon="pillBottle" color="purple" sublabel="Till + debt repayments" />
-            <StatTile
+            <StatCard label="Cash Collected" value={formatMoney(totalRevenue)} icon="dollarSign" color="emerald" sublabel="Clinic + pharmacy" secret/>
+            <StatCard label="Clinic" value={formatMoney(clinicRev)} icon="building" color="blue" sublabel="Consultations, lab, procedures" secret/>
+            <StatCard label="Pharmacy" value={formatMoney(pharmacyRev)} icon="pillBottle" color="purple" sublabel="Till + debt repayments" secret/>
+            <StatCard
               label="Net"
               value={formatMoney(net)}
               icon="trendUp"
               color={net >= 0 ? 'emerald' : 'red'}
+              secret
               sublabel={`After ${formatMoney(totalExpenses)} operating expenses — excludes cost of goods`}
             />
           </div>
@@ -1896,20 +1869,22 @@ function BillingSubTab() {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <StatTile label="Total Billed" value={formatMoney(s.total_billed ?? 0)} icon="receipt" color="blue" />
-        <StatTile label="Total Collected" value={formatMoney(s.total_collected ?? 0)} icon="dollarSign" color="green" />
-        <StatTile
+        <StatCard secret label="Total Billed" value={formatMoney(s.total_billed ?? 0)} icon="receipt" color="blue" />
+        <StatCard secret label="Total Collected" value={formatMoney(s.total_collected ?? 0)} icon="dollarSign" color="green" />
+        <StatCard
           label="Outstanding"
           value={formatMoney(s.total_outstanding ?? 0)}
           icon="clock"
           color="amber"
+          secret
           sublabel={`${s.pending_count ?? 0} open bill${s.pending_count === 1 ? '' : 's'}`}
         />
-        <StatTile
+        <StatCard
           label="Waived"
           value={formatMoney(s.total_waived ?? 0)}
           icon="archive"
           color="slate"
+          secret
           sublabel={`${s.waived_count ?? 0} bill${s.waived_count === 1 ? '' : 's'}`}
         />
       </div>

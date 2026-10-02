@@ -291,14 +291,10 @@ export default function OTCSalesTab() {
       <div className="flex gap-4 items-start">
         <div className="flex-1 min-w-0 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <StatCard icon="dollarSign" color="green" label="Today's Revenue"
+            <StatCard icon="dollarSign" secret color="green" label="Today's Revenue"
               value={formatMoney(stats.today_revenue)} sublabel="counter sales today" />
-            <StatCard icon="receipt" color="blue" label="Today's Sales"
+            <StatCard icon="receipt" secret color="blue" label="Today's Sales"
               value={stats.today_count} sublabel="transactions" />
-            <StatCard icon="trendUp" color="purple" label="Total Revenue"
-              value={formatMoney(stats.total_revenue)} sublabel="all-time" />
-            <StatCard icon="shoppingCart" color="amber" label="Total Sales"
-              value={stats.total_sales} sublabel="transactions" />
           </div>
 
           <div className="flex items-start justify-between gap-3 flex-wrap">

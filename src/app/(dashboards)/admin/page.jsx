@@ -5,11 +5,12 @@
 // Defensive against partial / unexpected API shapes — uses optional chaining
 // and fallback defaults throughout.
 import { useQuery } from '@tanstack/react-query'
+import { useContext } from 'react'
 import api from '@/lib/api'
 import {
   Card, CardHeader, Badge, EmptyState, ErrorState, Icon,
   SkeletonCard, SkeletonList,
-  formatMoney, formatTime, timeAgo, cap, badgeClass,
+  formatMoney, formatTime, timeAgo, cap, badgeClass, StatCard, RevenueHiddenContext
 } from '@/utils/helpers'
 
 // Visit pipeline stages and colors (per task spec):
@@ -76,6 +77,7 @@ const ACTIVITY_COLOR = {
 }
 
 export default function OverviewTab() {
+  const revenueHidden = useContext(RevenueHiddenContext)
   const q = useQuery({
     queryKey: ['admin', 'overview'],
     queryFn: () => api.get('/api/admin/overview'),
@@ -148,21 +150,18 @@ export default function OverviewTab() {
           <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">across the pipeline</p>
         </Card>
 
-        <Card className="p-4">
-          <div className="flex items-start justify-between mb-2">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400">Revenue Today</p>
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400">
-              <Icon name="dollarSign" size={18} />
-            </div>
-          </div>
-          <p className="text-2xl font-bold tabular-nums text-emerald-700 dark:text-emerald-400">{formatMoney(revenueToday)}</p>
-          <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-2">
-            stage 1 + stage 2
-            {stats.stage1_collected != null && stats.stage2_collected != null && (
-              <span className="ml-1">· {formatMoney(stats.stage1_collected)} + {formatMoney(stats.stage2_collected)}</span>
-            )}
-          </p>
-        </Card>
+        <StatCard
+          secret
+          icon="dollarSign"
+          color="emerald"
+          label="Revenue Today"
+          value={formatMoney(revenueToday)}
+          sublabel={
+            revenueHidden || stats.stage1_collected == null || stats.stage2_collected == null
+              ? 'stage 1 + stage 2'
+              : `stage 1 + stage 2 · ${formatMoney(stats.stage1_collected)} + ${formatMoney(stats.stage2_collected)}`
+          }
+        />
 
         <Card className="p-4">
           <div className="flex items-start justify-between mb-2">
@@ -194,7 +193,7 @@ export default function OverviewTab() {
 
       {/* Two-col: staff on duty + recent activity */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <ActiveStaffCard staff={staffOnDuty}/>
+        <ActiveStaffCard staff={staffOnDuty} />
         <RecentActivityCard activity={activity} />
       </div>
 

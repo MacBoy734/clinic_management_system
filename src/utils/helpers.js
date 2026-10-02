@@ -1,4 +1,7 @@
+import { createContext, useContext } from 'react'
 
+export const RevenueHiddenContext = createContext(false)
+export const REVENUE_MASK = '******'
 // Format money as Kenyan Shillings
 export function formatMoney(amount) {
   if (amount == null || isNaN(amount)) return 'KSh 0'
@@ -173,10 +176,35 @@ export const STAT_COLORS = {
     value: 'text-emerald-700 dark:text-emerald-400',
     icon: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400',
   },
-  amber: {
+    amber: {
     card: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50',
     value: 'text-amber-700 dark:text-amber-400',
     icon: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400',
+  },
+  emerald: {
+    card: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/50',
+    value: 'text-emerald-700 dark:text-emerald-400',
+    icon: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400',
+  },
+  red: {
+    card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50',
+    value: 'text-red-700 dark:text-red-400',
+    icon: 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400',
+  },
+  purple: {
+    card: 'bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-900/50',
+    value: 'text-purple-700 dark:text-purple-400',
+    icon: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400',
+  },
+  cyan: {
+    card: 'bg-cyan-50 border-cyan-200 dark:bg-cyan-950/30 dark:border-cyan-900/50',
+    value: 'text-cyan-700 dark:text-cyan-400',
+    icon: 'bg-cyan-100 text-cyan-600 dark:bg-cyan-900/40 dark:text-cyan-400',
+  },
+  slate: {
+    card: 'bg-white border-gray-200 dark:bg-[#1e293b] dark:border-gray-700/60',
+    value: 'text-gray-700 dark:text-gray-300',
+    icon: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400',
   },
   red: {
     card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50',
@@ -286,6 +314,7 @@ export function Icon({ name, size = 18, className = '' }) {
     barChart: <><line x1="12" y1="20" x2="12" y2="10" /><line x1="18" y1="20" x2="18" y2="4" /><line x1="6" y1="20" x2="6" y2="16" /></>,
     package: <><path d="m7.5 4.27 9 5.15" /><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" /></>,
     eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>,
+    eyeOff: <><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" /><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" /><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24" /><line x1="1" y1="1" x2="23" y2="23" /></>,
     edit: <><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4Z" /></>,
     trash: <><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></>,
     phone: <><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" /></>,
@@ -336,7 +365,10 @@ export function Icon({ name, size = 18, className = '' }) {
   )
 }
 
-export function StatCard({ icon, label, value, sublabel, trend, loading = false, color = 'blue' }) {
+export function StatCard({ icon, label, value, sublabel, trend, loading = false, color = 'blue', secret = false }) {
+  const revenueHidden = useContext(RevenueHiddenContext)
+  if (secret && revenueHidden) value = REVENUE_MASK
+
   if (loading) {
     return (
       <div className="rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-[#1e293b] p-4">
@@ -371,7 +403,7 @@ export function StatCard({ icon, label, value, sublabel, trend, loading = false,
           </div>
         )}
       </div>
-      <p className={`text-2xl font-bold tabular-nums ${c.value}`}>
+            <p className={`text-2xl font-bold tabular-nums truncate ${c.value}`}>
         {value}
       </p>
       {(trend || sublabel) && (

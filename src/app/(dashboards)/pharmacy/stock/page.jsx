@@ -291,15 +291,17 @@ function StockInventory() {
           color="blue"
           label={category === 'all' ? 'Total Items' : categoryLabel(category)}
           value={scoped.length}
+          secret
           sublabel="SKUs"
         />
-        <StatCard icon="alert" color="amber" label="Low Stock" value={lowStock.length} sublabel="need reorder" />
-        <StatCard icon="x" color="red" label="Out of Stock" value={outOfStock.length} sublabel="items" />
+        <StatCard icon="alert" color="amber" label="Low Stock" value={lowStock.length} sublabel="need reorder" secret/>
+        <StatCard icon="x" color="red" label="Out of Stock" value={outOfStock.length} sublabel="items" secret/>
         <StatCard
           icon="clock"
           color="purple"
           label={`Expiring ≤${EXPIRY_WARNING_DAYS}d`}
           value={expiringSoon.length}
+          secret
           sublabel="items"
         />
         <StatCard
@@ -307,6 +309,7 @@ function StockInventory() {
           color="green"
           label="Stock Value"
           value={formatMoney(stockValue)}
+          secret
           sublabel="at cost"
         />
       </div>

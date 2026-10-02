@@ -8,7 +8,7 @@ import { useAuthStore } from '@/store/authStore'
 import { useThemeStore } from '@/store/themeStore'
 import { useNotificationStore } from '@/store/notificationStore'
 import socket from '@/lib/socket'
-import { Icon } from '@/utils/helpers'
+import { Icon, RevenueHiddenContext } from '@/utils/helpers'
 import api from '@/lib/api'
 
 // ─── Nav config ───────────────────────────────────────────────────────────────
@@ -270,9 +270,8 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
   const logout = useAuthStore((s) => s.logout)
 
   const { dark, toggleDark } = useThemeStore()
+  const [revenueHidden, setRevenueHidden] = useState(true)
 
-  // addNotification still used by the socket handler to push live events
-  // into the local store (for immediate bell count bump without waiting for a refetch)
   const { addNotification } = useNotificationStore()
 
   const [notifOpen, setNotifOpen] = useState(false)
@@ -380,7 +379,8 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
   const roleLabel = ROLE_LABELS[user.role] || user.role
   const navItems = NAV_BY_ROLE[user.role] || []
 
-  return (
+    return (
+    <RevenueHiddenContext.Provider value={revenueHidden}>
     <div className="flex h-screen bg-[#f0f4f8] dark:bg-[#0f172a] overflow-hidden">
 
       {/* ── Sidebar ─────────────────────────────────────────────────────────── */}
@@ -500,8 +500,22 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
             title="Reload page"
             className="p-1.5 rounded-md text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors"
           >
-            <RefreshIcon />
+                       <RefreshIcon />
           </button>
+          {/* Revenue privacy toggle */}
+          <button
+            onClick={() => setRevenueHidden((v) => !v)}
+            title={revenueHidden ? 'Show revenue figures' : 'Hide revenue figures'}
+            aria-pressed={revenueHidden}
+            className={`p-1.5 rounded-md transition-colors hover:bg-gray-100 dark:hover:bg-gray-700/50 ${
+              revenueHidden
+                ? 'text-amber-500 dark:text-amber-400'
+                : 'text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300'
+            }`}
+          >
+            <Icon name={revenueHidden ? 'eyeOff' : 'eye'} size={17} />
+          </button>
+
           {/* Theme toggle */}
           <button
             onClick={toggleDark}
@@ -632,7 +646,8 @@ export default function AppLayout({ children, title = 'Dashboard', allowedRoles 
         <main className="flex-1 overflow-y-auto p-5">
           {children}
         </main>
-      </div>
+          </div>
     </div>
+    </RevenueHiddenContext.Provider>
   )
 }

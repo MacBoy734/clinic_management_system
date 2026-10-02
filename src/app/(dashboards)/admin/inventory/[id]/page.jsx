@@ -8,7 +8,7 @@ import api from '@/lib/api'
 import { useAuthStore } from '@/store/authStore'
 import {
   Card, CardHeader, Badge, EmptyState, InlineLoader, Icon,
-  formatMoney, formatDate, timeAgo, cap,
+  formatMoney, formatDate, timeAgo, cap, StatCard
 } from '@/utils/helpers'
 import { use } from 'react'
 
@@ -214,10 +214,10 @@ export default function AdminProductPage({ params }) {
 
       {/* ─── 4 Stat Tiles ─── */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatTile icon="box" label="Current Stock" value={stock.toLocaleString()} sublabel={product.unit} color={status.color} />
-        <StatTile icon="alert" label="Reorder Level" value={reorder.toLocaleString()} sublabel={product.unit} color="amber" />
-        <StatTile icon="dollarSign" label="Retail Price" value={formatMoney(product.normal_price)} sublabel="per unit" color="green" />
-        <StatTile icon="barChart" label="Total Movements" value={(summary.total_movements ?? totalMovements).toLocaleString()} sublabel="all time" color="blue" />
+        <StatCard icon="box" label="Current Stock" value={stock.toLocaleString()} sublabel={product.unit} color={status.color} />
+        <StatCard icon="alert" label="Reorder Level" value={reorder.toLocaleString()} sublabel={product.unit} color="amber" />
+        <StatCard icon="dollarSign" secret label="Retail Price" value={formatMoney(product.normal_price)} sublabel="per unit" color="green" />
+        <StatCard icon="barChart" label="Total Movements" value={(summary.total_movements ?? totalMovements).toLocaleString()} sublabel="all time" color="blue" />
       </div>
 
       {/* ─── 3-Column Grid ─── */}
@@ -483,30 +483,7 @@ export default function AdminProductPage({ params }) {
   )
 }
 
-// ─── Sub-components ──────────────────────────────────────────────────────────
 
-function StatTile({ icon, label, value, sublabel, color = 'blue' }) {
-  const map = {
-    blue:   { card: 'bg-blue-50 border-blue-200 dark:bg-blue-950/30 dark:border-blue-900/50',   value: 'text-blue-700 dark:text-blue-400',   icon: 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400' },
-    green:  { card: 'bg-emerald-50 border-emerald-200 dark:bg-emerald-950/30 dark:border-emerald-900/50', value: 'text-emerald-700 dark:text-emerald-400', icon: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400' },
-    amber:  { card: 'bg-amber-50 border-amber-200 dark:bg-amber-950/30 dark:border-amber-900/50', value: 'text-amber-700 dark:text-amber-400', icon: 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400' },
-    red:    { card: 'bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-900/50',       value: 'text-red-700 dark:text-red-400',     icon: 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' },
-    purple: { card: 'bg-purple-50 border-purple-200 dark:bg-purple-950/30 dark:border-purple-900/50', value: 'text-purple-700 dark:text-purple-400', icon: 'bg-purple-100 text-purple-600 dark:bg-purple-900/40 dark:text-purple-400' },
-  }
-  const c = map[color] || map.blue
-  return (
-    <div className={`rounded-xl border p-4 ${c.card}`}>
-      <div className="flex items-start justify-between mb-2">
-        <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-400 dark:text-gray-400">{label}</p>
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${c.icon}`}>
-          <Icon name={icon} size={18} />
-        </div>
-      </div>
-      <p className={`text-2xl font-bold tabular-nums ${c.value}`}>{value}</p>
-      {sublabel && <p className="text-[11px] text-gray-500 dark:text-gray-400 mt-1">{sublabel}</p>}
-    </div>
-  )
-}
 
 function DetailRow({ label, children }) {
   return (
